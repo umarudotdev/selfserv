@@ -1,0 +1,7 @@
+#pragma once
+
+#define SELFSERV_NAME "selfserv"
+#define SELFSERV_VERSION_MAJOR 0
+#define SELFSERV_VERSION_MINOR 0
+#define SELFSERV_VERSION_PATCH 1
+#define SELFSERV_VERSION "0.0.1"

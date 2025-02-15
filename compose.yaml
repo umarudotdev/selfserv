@@ -1,0 +1,6 @@
+services:
+  make:
+    build: .
+    volumes:
+      - .:/usr/src/app
+    entrypoint: ["make"]
