@@ -2,7 +2,10 @@
 #include <string>
 #include <vector>
 
-struct HttpHeader { std::string name; std::string value; };
+struct HttpHeader {
+  std::string name;
+  std::string value;
+};
 
 struct HttpRequest {
   std::string method;
@@ -21,6 +24,7 @@ class HttpRequestParser {
   bool parse(const std::string &data, HttpRequest &req);
   size_t consumed() const { return consumed_; }
   bool error() const { return state_ == S_ERROR; }
+
  private:
   enum State { S_REQUEST_LINE, S_HEADERS, S_BODY, S_DONE, S_ERROR } state_;
   size_t contentLength_;
@@ -28,7 +32,13 @@ class HttpRequestParser {
   bool chunked_;
   size_t headerEndOffset_;
   // Chunked decoding state
-  enum ChunkState { CHUNK_SIZE, CHUNK_DATA, CHUNK_CRLF, CHUNK_TRAILER, CHUNK_DONE } chunkState_;
+  enum ChunkState {
+    CHUNK_SIZE,
+    CHUNK_DATA,
+    CHUNK_CRLF,
+    CHUNK_TRAILER,
+    CHUNK_DONE
+  } chunkState_;
   size_t currentChunkSize_;
   size_t currentChunkRead_;
 };

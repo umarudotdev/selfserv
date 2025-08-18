@@ -1,8 +1,9 @@
 #include "config/ConfigParser.hpp"
+
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <cstdio>
 
 ConfigParser::ConfigParser() {}
 
@@ -26,14 +27,20 @@ bool ConfigParser::parseFile(const char *path, Config &out) {
   return true;
 }
 
-bool ConfigParser::parseLine(const std::string &line, Config &out, ServerConfig *&currentServer) {
+bool ConfigParser::parseLine(const std::string &line, Config &out,
+                             ServerConfig *&currentServer) {
   if (line.empty() || line[0] == '#') return true;
-  std::string::size_type start = 0; std::vector<std::string> tokens;
+  std::string::size_type start = 0;
+  std::vector<std::string> tokens;
   while (start < line.size()) {
-    while (start < line.size() && (line[start] == ' ' || line[start] == '\t' || line[start] == '\n')) ++start;
+    while (start < line.size() &&
+           (line[start] == ' ' || line[start] == '\t' || line[start] == '\n'))
+      ++start;
     if (start >= line.size()) break;
     std::string::size_type end = start;
-    while (end < line.size() && line[end] != ' ' && line[end] != '\t' && line[end] != '\n') ++end;
+    while (end < line.size() && line[end] != ' ' && line[end] != '\t' &&
+           line[end] != '\n')
+      ++end;
     tokens.push_back(line.substr(start, end - start));
     start = end;
   }
@@ -48,7 +55,8 @@ bool ConfigParser::parseLine(const std::string &line, Config &out, ServerConfig 
     return true;
   } else if (tokens[0] == "server_name") {
     if (!currentServer || tokens.size() < 2) return false;
-    for (size_t i = 1; i < tokens.size(); ++i) currentServer->serverNames.push_back(tokens[i]);
+    for (size_t i = 1; i < tokens.size(); ++i)
+      currentServer->serverNames.push_back(tokens[i]);
     return true;
   } else if (tokens[0] == "error_page_root") {
     if (!currentServer || tokens.size() < 2) return false;
@@ -92,16 +100,18 @@ bool ConfigParser::parseLine(const std::string &line, Config &out, ServerConfig 
         size_t start = 0;
         while (start < val.size()) {
           size_t comma = val.find(',', start);
-            if (comma == std::string::npos) comma = val.size();
+          if (comma == std::string::npos) comma = val.size();
           rc.methods.push_back(val.substr(start, comma - start));
           start = comma + 1;
         }
       } else if (key == "upload") {
-        if (val == "on" || val == "1" || val == "true") rc.uploadsEnabled = true;
+        if (val == "on" || val == "1" || val == "true")
+          rc.uploadsEnabled = true;
       } else if (key == "upload_path") {
         rc.uploadPath = val;
       } else if (key == "autoindex") {
-        if (val == "on" || val == "1" || val == "true") rc.directoryListing = true;
+        if (val == "on" || val == "1" || val == "true")
+          rc.directoryListing = true;
       } else if (key == "redirect") {
         rc.redirect = val;
       } else if (key == "cgi_ext") {

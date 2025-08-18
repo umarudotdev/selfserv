@@ -1,9 +1,10 @@
 #pragma once
 
-#include "config/Config.hpp"
+#include <cstdio>
 #include <string>
 #include <vector>
-#include <cstdio>
+
+#include "config/Config.hpp"
 
 class ConfigParser {
  public:
@@ -11,5 +12,6 @@ class ConfigParser {
   bool parseFile(const char *path, Config &out);
 
  private:
-  bool parseLine(const std::string &line, Config &out, ServerConfig *&currentServer);
+  bool parseLine(const std::string &line, Config &out,
+                 ServerConfig *&currentServer);
 };

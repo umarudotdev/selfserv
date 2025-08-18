@@ -2,12 +2,15 @@
 #include <unistd.h>
 
 // RAII wrapper for a file descriptor
-// Copying duplicates the underlying descriptor with dup(); assignment closes previous.
+// Copying duplicates the underlying descriptor with dup(); assignment closes
+// previous.
 class FD {
  public:
   FD() : fd_(-1) {}
   explicit FD(int fd) : fd_(fd) {}
-  FD(const FD &other) : fd_(-1) { if (other.fd_ >= 0) fd_ = ::dup(other.fd_); }
+  FD(const FD &other) : fd_(-1) {
+    if (other.fd_ >= 0) fd_ = ::dup(other.fd_);
+  }
   FD &operator=(const FD &other) {
     if (this != &other) {
       closeIfValid();
@@ -28,6 +31,7 @@ class FD {
     fd_ = -1;
     return tmp;
   }
+
  private:
   void closeIfValid() {
     if (fd_ >= 0) {

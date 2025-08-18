@@ -1,23 +1,23 @@
 // Entry point: initialize configuration and start event loop
 // C++98 compliant; no exceptions thrown explicitly.
 
+#include <csignal>
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <vector>
-#include <cstdio>
-#include <csignal>
 
-#include "selfserv.h"
-#include "server/Server.hpp"
 #include "config/Config.hpp"
 #include "config/ConfigParser.hpp"
+#include "selfserv.h"
+#include "server/Server.hpp"
 
 static volatile std::sig_atomic_t g_running = 1;
 
 static void handle_sigint(int) { g_running = 0; }
 
 static std::string defaultConfigPath() {
-  return "conf/selfserv.conf"; // relative to working directory
+  return "conf/selfserv.conf";  // relative to working directory
 }
 
 int main(int argc, char **argv) {
@@ -48,8 +48,8 @@ int main(int argc, char **argv) {
   }
 
   while (g_running) {
-    if (!server.pollOnce(1000)) { // 1s timeout to allow signal check
-      break; // poll error
+    if (!server.pollOnce(1000)) {  // 1s timeout to allow signal check
+      break;                       // poll error
     }
     server.processEvents();
   }
