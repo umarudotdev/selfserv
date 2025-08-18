@@ -26,6 +26,9 @@ static bool setNonBlocking(int fd) {
 }
 }
 
+// forward declaration for static helper used in timeout sweep
+static std::string buildResponse(int code, const std::string &reason, const std::string &body, const char *ctype, bool keepAlive, bool headOnly);
+
 Server::Server(const Config &cfg) : config_(cfg) {}
 
 bool Server::init() { return openListeningSockets(); }
@@ -67,12 +70,34 @@ bool Server::openListeningSockets() {
 bool Server::pollOnce(int timeoutMs) {
   buildPollFds(pfds_);
   if (pfds_.empty()) return true; // nothing to poll
+  int dyn = computePollTimeout();
+  if (dyn >= 0 && (timeoutMs < 0 || dyn < timeoutMs)) timeoutMs = dyn;
   int ret = ::poll(&pfds_[0], pfds_.size(), timeoutMs);
   if (ret < 0) {
     std::perror("poll");
     return false;
   }
   return true;
+}
+
+int Server::computePollTimeout() const {
+  if (clients_.empty()) return -1;
+  unsigned long nowMs = (unsigned long)std::time(0) * 1000UL;
+  const ServerConfig &sc = config_.servers[0];
+  long best = -1;
+  for (std::map<int, ClientConnection>::const_iterator it = clients_.begin(); it != clients_.end(); ++it) {
+    const ClientConnection &c = it->second;
+    unsigned long deadline = 0;
+    if (!c.headersComplete) deadline = c.createdAtMs + (unsigned long)sc.headerTimeoutMs;
+    else if (!c.bodyComplete) deadline = c.lastActivityMs + (unsigned long)sc.bodyTimeoutMs;
+    else if (c.keepAlive) deadline = c.lastActivityMs + (unsigned long)sc.idleTimeoutMs;
+    if (deadline) {
+      long remain = (long)deadline - (long)nowMs;
+      if (remain < 0) remain = 0;
+      if (best < 0 || remain < best) best = remain;
+    }
+  }
+  return (int)(best);
 }
 
 void Server::processEvents() {
@@ -93,8 +118,14 @@ void Server::processEvents() {
     }
     if (closeIt) {
       int fd = itSweep->first;
-      std::cerr << "[timeout] closing fd=" << fd << "\n";
-      clients_.erase(itSweep++);
+      std::cerr << "[timeout] fd=" << fd << " sending 408\n";
+      // send 408 if we haven't queued a response yet
+      if (c.writeBuf.empty()) {
+        c.writeBuf = buildResponse(408, "Request Timeout", "408 Request Timeout\n", "text/plain", false, false);
+        c.wantWrite = true;
+      }
+      c.keepAlive = false;
+      ++itSweep; // leave connection to flush
     } else {
       ++itSweep;
     }
