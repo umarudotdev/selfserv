@@ -31,7 +31,7 @@ OBJS		:= $(SRCS:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
 DEPS		:= $(OBJS:.o=.d)
 
 CXX			:= c++
-CXXFLAGS	:= -std=c++98 -Wall -Wextra -Werror -pedantic
+CXXFLAGS	:= -Wall -Wextra -Werror -pedantic
 
 CPPFLAGS	:= $(addprefix -I,$(INCS)) -MMD -MP
 LDFLAGS		:= $(addprefix -L,$(dir $(LIBS)))
@@ -169,9 +169,33 @@ format.norm: ## Format the code according to the norm
 	c_formatter_42 \
 	$(shell find $(SRC_DIR) $(INC_DIR) -name '*.c' -or -name '*.cpp' -or -name '*.h' -or -name '*.hpp')
 
+CRITERION_CFLAGS := $(shell pkg-config --cflags criterion 2>/dev/null)
+CRITERION_LIBS   := $(shell pkg-config --libs criterion 2>/dev/null)
+
+TEST_SRCS := $(shell find tests/unit -name '*.cpp' 2>/dev/null)
+TEST_OBJS := $(TEST_SRCS:tests/unit/%.cpp=$(BUILD_DIR)/tests/unit/%.o)
+
+ifeq ($(strip $(CRITERION_LIBS)),)
 .PHONY: test
-test: ## TODO: Run the tests
-	$(info $(INFO)TODO$(RESET) Run the tests)
+test: ## Run unit tests (Criterion not installed)
+	@echo "Criterion not found. Install it (e.g. sudo apt-get install -y libcriterion-dev) to enable tests." >&2
+	@exit 1
+else
+.PHONY: test
+test: $(BUILD_DIR)/tests_runner ## Build and run Criterion unit tests
+	$(call message,RUNNING,tests,$(CYAN))
+	./$(BUILD_DIR)/tests_runner
+
+$(BUILD_DIR)/tests/unit/%.o: tests/unit/%.cpp
+	mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(CRITERION_CFLAGS) -c $< -o $@
+	-printf $(CLEAR)
+	$(call message,CREATED,$(basename $(notdir $@)),$(GREEN))
+
+$(BUILD_DIR)/tests_runner: $(OBJS) $(TEST_OBJS)
+	$(CXX) $(LDFLAGS) $^ $(CRITERION_LIBS) -o $@
+	$(call message,CREATED,tests_runner,$(BLUE))
+endif
 
 .PHONY: index
 index: ## Generate `compile_commands.json`
