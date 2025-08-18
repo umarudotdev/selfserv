@@ -13,6 +13,8 @@ struct RouteConfig {
   bool directoryListing;   // enable/disable autoindex
   bool uploadsEnabled;     // allow uploads
   std::string uploadPath;  // where to store uploads
+  std::string cgiExtension;   // e.g. .py
+  std::string cgiInterpreter; // e.g. /usr/bin/python3
   RouteConfig() : directoryListing(false), uploadsEnabled(false) {}
 };
 
@@ -26,8 +28,9 @@ struct ServerConfig {
   int headerTimeoutMs;   // time to receive full headers
   int bodyTimeoutMs;     // time to receive full body
   int idleTimeoutMs;     // keep-alive idle timeout
+  int cgiTimeoutMs;      // max CGI execution time
   std::vector<RouteConfig> routes;
-  ServerConfig() : port(0), clientMaxBodySize(1 << 20), headerTimeoutMs(5000), bodyTimeoutMs(10000), idleTimeoutMs(15000) {}
+  ServerConfig() : port(0), clientMaxBodySize(1 << 20), headerTimeoutMs(5000), bodyTimeoutMs(10000), idleTimeoutMs(15000), cgiTimeoutMs(5000) {}
 };
 
 struct Config {

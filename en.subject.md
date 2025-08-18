@@ -306,3 +306,161 @@ files to ensure they are correct.
 26120A16827E1B16612137E59ECD492E46EAB67D109B142D49054A7C281404901890F
 619D682524F
 ```
+
+---
+
+## Appendix A – Implementation Mapping (Project Selfserv)
+
+This appendix (not part of the original subject text) summarizes how the codebase satisfies each mandatory requirement and provides a minimal reference configuration.
+
+### A.1 Mandatory Feature Coverage
+
+Implemented (core requirements):
+
+1. Single poll loop & non‑blocking I/O
+
+- All listening and client sockets set O_NONBLOCK.
+- Exactly one `poll()` per iteration in `Server::pollOnce` / `processEvents` handling all read/write readiness (including CGI pipe fds).
+
+2. Supported HTTP methods
+
+- GET, POST, DELETE. Others return 405 with correct status line.
+
+3. Static file & directory serving
+
+- Longest‑prefix route resolves root, optional `index` file; optional autoindex (directory listing) per route.
+
+4. File uploads
+
+- POST raw body saved with generated filename or multipart parts parsed (basic in‑memory parser) and written to configured `upload_path`.
+
+5. Body size limit
+
+- Checked after parse against `client_max_body_size`; returns 413.
+
+6. Chunked transfer decoding
+
+- Request parser supports chunked bodies (unchunks before handing to CGI or upload logic).
+
+7. Keep‑alive & pipelining
+
+- Persistent connections honored (HTTP/1.1 default) unless `Connection: close`; pipeline consumption via parser `consumed()` handling.
+
+8. Timeouts
+
+- Header, body, idle timeouts; incomplete request -> 408; idle keep‑alive closes silently; CGI execution timeout (504) via `cgi_timeout`.
+
+9. Virtual hosts (server_name)
+
+- Host header case‑insensitive match selects server block; first block for host:port is default.
+
+10. Routes / Location‑style config
+
+- Per route: allowed methods, root, index, autoindex, upload enable/path, redirect target, CGI extension + interpreter.
+
+11. Redirect responses
+
+- Route `redirect=` emits 302 (Found) with `Location` header.
+
+12. CGI execution
+
+- File extension match spawns interpreter (or direct script) via fork/exec with non‑blocking pipes, minimal CGI env, header parsing (Status, Content-Type), body streamed after headers; timeout enforced.
+
+13. Default & custom error pages
+
+- If `error_page_root` set, attempts `<code>.html` (e.g., 404.html); falls back to built‑in plain text.
+
+14. Accuracy of status codes
+
+- 200/204/301-302 (redirect)/400/403/404/405/408/413/500/501/504 used where appropriate.
+
+15. Multiple listening ports
+
+- One listening socket per `server` directive (host + port) — supports multiple ports simultaneously.
+
+16. Disconnection handling
+
+- HUP/ERR events close client; timeouts and completed responses transition phases and cleanup.
+
+17. No extra forks
+
+- `fork()` only in CGI path.
+
+Partially implemented / basic (acceptable for mandatory but improvable):
+
+- Multipart handling: Works for moderate size; not streaming (memory usage grows with large payloads).
+- CGI environment: Minimal set (REQUEST*METHOD, SCRIPT_FILENAME, CONTENT_LENGTH, SERVER_PROTOCOL, GATEWAY_INTERFACE, REDIRECT_STATUS); missing PATH_INFO, QUERY_STRING parsing, SERVER_NAME/PORT, HTTP*\* passthrough (can be added without core design change).
+- Path sanitization: Simple `..` traversal guard; no full realpath canonicalization or symlink policy.
+
+Non‑mandatory enhancements remaining (future hardening):
+
+- Streamed multipart & large upload chunk writing.
+- Richer CGI environment & header passthrough (Set-Cookie, etc.).
+- Case‑insensitive header map normalization (current linear scan with case‑insensitive compare is O(n); acceptable at small header counts).
+- Enhanced logging (separate access/error logs).
+- Additional stress / fuzz tests; performance profiling.
+
+### A.2 Minimal Example Configuration
+
+```
+# server <host> <port>
+server 0.0.0.0 42069
+  server_name example.local
+  error_page_root ./errors
+  client_max_body_size 1048576      # 1 MiB
+  header_timeout 5000
+  body_timeout 10000
+  idle_timeout 15000
+  cgi_timeout 5000
+
+  # Static site root with index and autoindex disabled
+  route / ./www index=index.html methods=GET
+
+  # Upload endpoint (raw or multipart) storing into ./uploads
+  route /upload ./www uploadsEnabled=on upload_path=./uploads methods=POST
+
+  # Redirect old path
+  route /old ./www redirect=/new-location methods=GET
+
+  # CGI: run .py files via python3 interpreter
+  route /cgi-bin ./www/cgi cgi_ext=.py cgi_bin=/usr/bin/python3 methods=GET,POST
+
+  # Directory listing example
+  route /public ./public autoindex=on methods=GET
+
+# Second server on different port demonstrating vhost/default selection
+server 0.0.0.0 8081
+  server_name assets.local cdn.local
+  route / ./assets methods=GET
+```
+
+Place custom error pages like `errors/404.html`, `errors/500.html` etc. (omit if not desired—built‑in fallback used automatically).
+
+### A.3 Reviewer Checklist Mapping
+
+| Requirement               | Location / Mechanism                                   |
+| ------------------------- | ------------------------------------------------------ |
+| Single poll, non‑blocking | `Server::pollOnce`, `setNonBlocking` on all fds        |
+| Methods GET/POST/DELETE   | `handleReadable` method dispatch & route method filter |
+| Static files & index      | `readFile`, `index` handling in route logic            |
+| Autoindex                 | `listDir` when `directoryListing` true                 |
+| Uploads                   | POST branch (raw) & `parseMultipartFormData`           |
+| Body size limit           | Check vs `clientMaxBodySize` before handling route     |
+| Chunked decoding          | `HttpRequestParser` chunk states                       |
+| Keep‑alive/pipelining     | `handleWritable` buffer consumption / parser reset     |
+| Timeouts (408/idle)       | `processEvents` sweep logic                            |
+| CGI + timeout             | `maybeStartCgi`, `driveCgiIO`, sweep (504)             |
+| Redirect                  | Route `redirect` branch building 302                   |
+| Error pages               | `loadErrorPageBody` + fallback                         |
+| Virtual hosts             | `selectServer` Host header match                       |
+| Multiple ports            | One `server` line => one listening socket              |
+| Forbidden traversal       | `rel.find("..")` check returning 403                   |
+| No extra forks            | Only inside `maybeStartCgi`                            |
+
+### A.4 Notes
+
+- The project deliberately keeps data structures POD‑style per C++98 constraint and avoids dynamic polymorphism.
+- Future changes (e.g., richer CGI env) will not alter public config syntax; only environment population internals.
+- Stress testing & advanced header validation are recommended before production use.
+
+End of Appendix.
