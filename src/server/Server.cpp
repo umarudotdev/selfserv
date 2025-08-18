@@ -88,14 +88,19 @@ bool Server::pollOnce(int timeoutMs) {
 int Server::computePollTimeout() const {
   if (clients_.empty()) return -1;
   unsigned long nowMs = (unsigned long)std::time(0) * 1000UL;
-  const ServerConfig &sc = config_.servers[0];
   long best = -1;
   for (std::map<int, ClientConnection>::const_iterator it = clients_.begin(); it != clients_.end(); ++it) {
     const ClientConnection &c = it->second;
     unsigned long deadline = 0;
-    if (!c.headersComplete) deadline = c.createdAtMs + (unsigned long)sc.headerTimeoutMs;
-    else if (!c.bodyComplete) deadline = c.lastActivityMs + (unsigned long)sc.bodyTimeoutMs;
-    else if (c.keepAlive) deadline = c.lastActivityMs + (unsigned long)sc.idleTimeoutMs;
+    if (!c.headersComplete) {
+      // Can't know virtual host yet; use first server's header timeout
+      const ServerConfig &scHdr = config_.servers[0];
+      deadline = c.createdAtMs + (unsigned long)scHdr.headerTimeoutMs;
+    } else {
+      const ServerConfig &scRef = (c.serverIndex >= 0 && (size_t)c.serverIndex < config_.servers.size()) ? config_.servers[c.serverIndex] : config_.servers[0];
+      if (!c.bodyComplete) deadline = c.lastActivityMs + (unsigned long)scRef.bodyTimeoutMs;
+      else if (c.keepAlive) deadline = c.lastActivityMs + (unsigned long)scRef.idleTimeoutMs;
+    }
     if (deadline) {
       long remain = (long)deadline - (long)nowMs;
       if (remain < 0) remain = 0;
@@ -108,7 +113,6 @@ int Server::computePollTimeout() const {
 void Server::processEvents() {
   // Sweep for timeouts before handling events
   unsigned long nowMs = (unsigned long)std::time(0) * 1000UL;
-  const ServerConfig &scTO = config_.servers[0];
   std::map<int, ClientConnection>::iterator itSweep = clients_.begin();
   while (itSweep != clients_.end()) {
     ClientConnection &c = itSweep->second;
@@ -128,13 +132,17 @@ void Server::processEvents() {
         }
       }
     }
-    // header timeout
-    if (!c.headersComplete && scTO.headerTimeoutMs > 0 && nowMs - c.createdAtMs > (unsigned long)scTO.headerTimeoutMs) {
-      closeIt = true;
-    } else if (c.headersComplete && !c.bodyComplete && scTO.bodyTimeoutMs > 0 && nowMs - c.lastActivityMs > (unsigned long)scTO.bodyTimeoutMs) {
-      closeIt = true;
-    } else if (c.keepAlive && c.bodyComplete && scTO.idleTimeoutMs > 0 && nowMs - c.lastActivityMs > (unsigned long)scTO.idleTimeoutMs) {
-      closeIt = true;
+    // timeouts (use per-virtual-host once known)
+    if (!c.headersComplete) {
+      const ServerConfig &scHdr = config_.servers[0];
+      if (scHdr.headerTimeoutMs > 0 && nowMs - c.createdAtMs > (unsigned long)scHdr.headerTimeoutMs) closeIt = true;
+    } else {
+      const ServerConfig &scRef = (c.serverIndex >= 0 && (size_t)c.serverIndex < config_.servers.size()) ? config_.servers[c.serverIndex] : config_.servers[0];
+      if (!c.bodyComplete) {
+        if (scRef.bodyTimeoutMs > 0 && nowMs - c.lastActivityMs > (unsigned long)scRef.bodyTimeoutMs) closeIt = true;
+      } else if (c.keepAlive && scRef.idleTimeoutMs > 0 && nowMs - c.lastActivityMs > (unsigned long)scRef.idleTimeoutMs) {
+        closeIt = true;
+      }
     }
     if (closeIt) {
       int fd = itSweep->first;
