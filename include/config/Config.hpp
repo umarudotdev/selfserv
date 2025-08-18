@@ -22,8 +22,12 @@ struct ServerConfig {
   std::vector<std::string> serverNames;
   std::string errorPageRoot;
   size_t clientMaxBodySize; // bytes
+  // timeouts (milliseconds)
+  int headerTimeoutMs;   // time to receive full headers
+  int bodyTimeoutMs;     // time to receive full body
+  int idleTimeoutMs;     // keep-alive idle timeout
   std::vector<RouteConfig> routes;
-  ServerConfig() : port(0), clientMaxBodySize(1 << 20) {}
+  ServerConfig() : port(0), clientMaxBodySize(1 << 20), headerTimeoutMs(5000), bodyTimeoutMs(10000), idleTimeoutMs(15000) {}
 };
 
 struct Config {

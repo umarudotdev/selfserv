@@ -46,11 +46,52 @@ bool ConfigParser::parseLine(const std::string &line, Config &out, ServerConfig 
     out.servers.push_back(sc);
     currentServer = &out.servers.back();
     return true;
+  } else if (tokens[0] == "client_max_body_size") {
+    if (!currentServer || tokens.size() < 2) return false;
+    currentServer->clientMaxBodySize = (size_t)std::atoi(tokens[1].c_str());
+    return true;
+  } else if (tokens[0] == "header_timeout") {
+    if (!currentServer || tokens.size() < 2) return false;
+    currentServer->headerTimeoutMs = std::atoi(tokens[1].c_str());
+    return true;
+  } else if (tokens[0] == "body_timeout") {
+    if (!currentServer || tokens.size() < 2) return false;
+    currentServer->bodyTimeoutMs = std::atoi(tokens[1].c_str());
+    return true;
+  } else if (tokens[0] == "idle_timeout") {
+    if (!currentServer || tokens.size() < 2) return false;
+    currentServer->idleTimeoutMs = std::atoi(tokens[1].c_str());
+    return true;
   } else if (tokens[0] == "route") {
     if (!currentServer || tokens.size() < 3) return false;
     RouteConfig rc;
     rc.path = tokens[1];
     rc.root = tokens[2];
+    // Optional tokens: key=value
+    for (size_t i = 3; i < tokens.size(); ++i) {
+      std::string::size_type eq = tokens[i].find('=');
+      if (eq == std::string::npos) continue;
+      std::string key = tokens[i].substr(0, eq);
+      std::string val = tokens[i].substr(eq + 1);
+      if (key == "index") {
+        rc.index = val;
+      } else if (key == "methods") {
+        // comma separated
+        size_t start = 0;
+        while (start < val.size()) {
+          size_t comma = val.find(',', start);
+            if (comma == std::string::npos) comma = val.size();
+          rc.methods.push_back(val.substr(start, comma - start));
+          start = comma + 1;
+        }
+      } else if (key == "upload") {
+        if (val == "on" || val == "1" || val == "true") rc.uploadsEnabled = true;
+      } else if (key == "upload_path") {
+        rc.uploadPath = val;
+      } else if (key == "autoindex") {
+        if (val == "on" || val == "1" || val == "true") rc.directoryListing = true;
+      }
+    }
     currentServer->routes.push_back(rc);
     return true;
   }

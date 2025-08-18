@@ -2,6 +2,7 @@
 
 #include "config/Config.hpp"
 #include "server/FD.hpp"
+#include "http/HttpRequest.hpp"
 #include <map>
 #include <vector>
 #include <string>
@@ -12,7 +13,15 @@ struct ClientConnection {
   std::string readBuf;
   std::string writeBuf;
   bool wantWrite;
-  ClientConnection() : wantWrite(false) {}
+  HttpRequest request;
+  HttpRequestParser parser;
+  bool keepAlive;
+  unsigned long createdAtMs;
+  unsigned long lastActivityMs;
+  bool headersComplete;
+  bool bodyComplete;
+  bool timedOut;
+  ClientConnection() : wantWrite(false), keepAlive(false), createdAtMs(0), lastActivityMs(0), headersComplete(false), bodyComplete(false), timedOut(false) {}
 };
 
 class Server {
@@ -20,6 +29,7 @@ class Server {
   explicit Server(const Config &cfg);
   bool init();
   bool pollOnce(int timeoutMs);
+  int computePollTimeout() const; // dynamic based on earliest deadline
   void processEvents();
   void shutdown();
 
