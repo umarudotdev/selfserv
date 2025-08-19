@@ -59,35 +59,129 @@ include/selfserv.h     # Main header with version defines
 src/main.cpp           # Entry point with config file parsing
 src/                   # Implementation files (currently minimal)
 tests/                 # Unit tests (TODO implementation)
+docs/                  # Comprehensive documentation and examples
+├── config/            # Configuration parser examples
+├── http/              # HTTP parser implementation examples
+├── server/            # Server core and RAII wrappers
+├── integration/       # Go-based integration test framework
+└── unit/              # Unit test patterns and examples
 ```
 
-### Configuration Approach
+### Architecture Design Principles
 
-- Take NGINX server blocks as inspiration
-- Support multiple virtual hosts on same port
-- Route-based configuration for methods, CGI, uploads
-- Default error pages and custom error handling
+#### Event-Driven, Single-Threaded Architecture
+- **Single poll() loop**: All I/O operations go through one poll/select/epoll call
+- **Non-blocking I/O**: Never block on read/write operations - rely on poll readiness
+- **Event dispatching**: Single thread manages all connections simultaneously
+- **State machines**: Each connection progresses through well-defined states
+- **Resource efficiency**: Eliminates thread overhead and context switching
+
+#### Connection State Machine
+Connections progress through these states with compile-time safety:
+```
+ACCEPTED → REQ_HEADERS → REQ_BODY → HANDLE → RESP_BUILD → SENDING → KEEPALIVE_IDLE/CLOSING
+```
+
+#### Typestate Pattern Implementation
+Use template-based state types to ensure compile-time correctness:
+```cpp
+template<typename State>
+class Connection {
+  // State-specific operations only available in correct states
+  // Compile-time prevention of invalid state transitions
+};
+```
+
+### Configuration System Architecture
+
+#### NGINX-Inspired Configuration
+- **Server blocks**: Virtual host support with server_name matching
+- **Location blocks**: Route-based configuration with longest-prefix matching
+- **Directives**: Timeout, size limits, CGI, upload configuration
+- **POD structures**: Simple C++98-compatible config data structures
+
+#### Two-Stage Parsing
+1. **Lexical analysis**: Tokenize configuration file
+2. **Recursive descent parser**: Build configuration object tree
+
+### HTTP Protocol Implementation
+
+#### Streaming Request Parser
+- **Re-entrant state machine**: Handle fragmented incoming data
+- **Incremental parsing**: Parse headers and body as data arrives
+- **Content-Length and Chunked**: Support both transfer encoding methods
+- **Header validation**: Case-insensitive header handling with size limits
+
+#### Parser States
+```cpp
+enum ParserState {
+  kStateRequestLine,  // Parse "METHOD /path HTTP/1.1"
+  kStateHeaders,      // Parse header lines until \r\n\r\n
+  kStateBody,         // Parse body based on Content-Length/chunked
+  kStateDone,         // Request complete
+  kStateError         // Parse error occurred
+};
+```
 
 ### Non-blocking I/O Architecture
 
-- Single event loop managing all file descriptors
-- State machines for request parsing and response generation
-- Connection lifecycle management with proper cleanup
-- Client request timeouts and connection limits
+#### Event Loop Structure
+```cpp
+while (running) {
+  BuildPollFds();           // Prepare file descriptor array
+  int ready = poll(fds);    // Wait for I/O events
+  if (ready > 0) {
+    ProcessListeningSocket(); // Handle new connections
+    ProcessClientSockets();   // Handle client I/O
+  }
+  ProcessTimeouts();        // Check connection deadlines
+}
+```
+
+#### Connection Lifecycle Management
+- **Accept**: New connections from listening socket
+- **Read**: Non-blocking receive with partial data handling
+- **Parse**: Incremental HTTP request parsing
+- **Route**: Match request to configuration handlers
+- **Handle**: Execute static/CGI/upload/directory handlers
+- **Write**: Non-blocking response transmission
+- **Cleanup**: Resource deallocation and connection state cleanup
 
 ### Error Handling Patterns
 
-- Consistent error code return values (no exceptions in C++98)
-- Input validation and boundary checking
-- Graceful degradation for malformed requests
-- Resource cleanup on error paths
+#### Status-Based Error Handling (No Exceptions)
+- **Error codes**: Consistent return value patterns
+- **Error propagation**: Bubble errors up through call stack
+- **Graceful degradation**: Continue serving other clients on errors
+- **Client isolation**: Prevent one client error from affecting others
+
+#### HTTP Error Response Generation
+- **4xx Client errors**: Malformed requests, missing resources
+- **5xx Server errors**: Internal failures, CGI timeouts
+- **Custom error pages**: Configurable error response content
+- **Proper status codes**: RFC-compliant status code usage
 
 ### Resource Management Patterns
 
-- RAII wrapper classes for file descriptors and sockets
-- Clear ownership semantics for memory and handles
-- Avoid static/global class objects (C++98 initialization order issues)
-- Use POD types for configuration data
+#### RAII Implementation
+- **FD wrapper**: Automatic file descriptor lifecycle management
+```cpp
+class FD {
+  int m_fd;
+  // Constructor acquires, destructor releases
+  // Copy constructor uses dup() for safe sharing
+};
+```
+
+- **Memory management**: Manual new/delete with RAII wrappers
+- **Socket management**: Automatic cleanup on connection termination
+- **Process management**: Child process lifecycle for CGI execution
+
+#### Resource Ownership
+- **Clear ownership**: Single owner responsible for cleanup
+- **Transfer semantics**: Explicit ownership transfer patterns
+- **Scope-based cleanup**: Resources tied to object lifetimes
+- **No global state**: Avoid static/global class objects (initialization order issues)
 
 ## Critical Implementation Notes
 
@@ -100,13 +194,185 @@ tests/                 # Unit tests (TODO implementation)
 - **Chunked encoding**: Support for both request and response chunking
 - **File uploads**: Proper multipart/form-data handling
 
+### CGI Implementation Patterns
+
+#### CGI Process Management
+- **Fork-exec pattern**: fork() child process, execve() CGI script
+- **Pipe communication**: stdin/stdout redirection via pipes
+- **Environment variables**: Proper CGI meta-variable setup
+- **Non-blocking pipes**: CGI I/O integrated into main event loop
+- **Timeout handling**: Terminate runaway CGI processes
+- **Process cleanup**: Proper SIGCHLD handling and zombie prevention
+
+#### CGI Environment Setup
+```cpp
+// Required CGI environment variables
+setenv("REQUEST_METHOD", request.method.c_str(), 1);
+setenv("PATH_INFO", pathInfo.c_str(), 1);
+setenv("QUERY_STRING", queryString.c_str(), 1);
+setenv("CONTENT_TYPE", contentType.c_str(), 1);
+setenv("CONTENT_LENGTH", contentLength.c_str(), 1);
+setenv("SERVER_NAME", serverName.c_str(), 1);
+setenv("SERVER_PORT", serverPort.c_str(), 1);
+// ... additional meta-variables
+```
+
+#### CGI Response Parsing
+- **Document response**: Content-Type header + body content
+- **Redirect response**: Location header handling
+- **Local redirect**: Path-based internal redirects
+- **Error handling**: CGI script failures and malformed output
+
+### File Upload Implementation
+
+#### Multipart/Form-Data Processing
+- **Boundary detection**: Parse multipart boundary from Content-Type
+- **Streaming parser**: Process uploads without buffering entire content
+- **Part header parsing**: Content-Disposition, filename extraction
+- **Direct-to-disk streaming**: Avoid memory exhaustion on large uploads
+- **Upload limits**: Enforce client_max_body_size and individual file limits
+
+#### Upload State Machine
+```cpp
+enum UploadState {
+  kBoundarySearch,    // Looking for multipart boundary
+  kPartHeaders,       // Parsing part headers
+  kPartData,          // Streaming part content to disk
+  kPartComplete,      // Part finished, look for next boundary
+  kUploadComplete     // All parts processed
+};
+```
+
+### Testing Strategy & Patterns
+
+#### Unit Testing Framework
+- **Criterion integration**: Optional test framework for advanced assertions
+- **Fallback testing**: Basic assertions when Criterion unavailable
+- **Isolated components**: Test parsers, config, utilities independently
+- **Mock data**: Controlled test inputs for deterministic results
+
+#### Unit Test Examples
+```cpp
+// HTTP parser testing
+void test_parses_simple_get() {
+  HttpRequestParser parser;
+  HttpRequest request;
+  std::string raw = "GET /index.html HTTP/1.1\r\n\r\n";
+  bool complete = parser.Parse(raw, request);
+  assert(complete);
+  assert(request.method == "GET");
+  assert(request.uri == "/index.html");
+}
+```
+
+#### Integration Testing Strategy
+- **Go-based test framework**: Comprehensive integration test suite
+- **NGINX comparison**: Behavioral compatibility testing
+- **Multi-client simulation**: Concurrent connection testing
+- **Error condition testing**: Malformed requests, timeouts, resource limits
+- **Browser compatibility**: Real browser testing scenarios
+
+#### Integration Test Patterns
+```go
+func TestBasicGetRequest(t *testing.T) {
+  // Start both webserv and nginx
+  // Send identical requests to both
+  // Compare responses for behavioral compatibility
+}
+```
+
+### Performance Considerations
+
+#### Memory Management
+- **Minimize allocations**: Reuse buffers where possible
+- **Streaming processing**: Avoid loading entire files into memory
+- **Connection pooling**: Efficient connection state management
+- **Buffer sizing**: Optimal read/write buffer sizes
+
+#### Connection Scalability
+- **poll() vs select()**: Use poll() to eliminate FD_SETSIZE limitations
+- **Connection limits**: Configurable max_connections to prevent resource exhaustion
+- **Keep-alive support**: HTTP/1.1 persistent connections
+- **Pipeline support**: Multiple requests per connection
+
+#### Timeout Management
+- **Header timeout**: Time limit for receiving complete headers
+- **Body timeout**: Time limit for receiving complete request body
+- **Idle timeout**: Keep-alive connection idle time
+- **CGI timeout**: Maximum CGI script execution time
+
+### Common Pitfalls & Debugging
+
+#### Non-blocking I/O Pitfalls
+- **EAGAIN/EWOULDBLOCK**: Normal condition, not an error
+- **Partial reads/writes**: Always handle incomplete I/O operations
+- **Poll event interpretation**: Correctly handle POLLIN, POLLOUT, POLLERR
+- **Connection state consistency**: Ensure state machine transitions are valid
+
+#### CGI Implementation Pitfalls
+- **Zombie processes**: Always wait() for child processes
+- **Pipe deadlocks**: Non-blocking CGI I/O to prevent deadlocks
+- **Environment leakage**: Clean CGI environment setup
+- **Path traversal**: Validate CGI script paths for security
+
+#### HTTP Protocol Pitfalls
+- **Header case sensitivity**: HTTP headers are case-insensitive
+- **Transfer encoding precedence**: Chunked takes precedence over Content-Length
+- **Connection header**: Proper keep-alive vs close handling
+- **Status code compliance**: Use appropriate HTTP status codes
+
+#### Memory and Resource Pitfalls
+- **File descriptor leaks**: Ensure proper FD cleanup on all code paths
+- **Memory leaks**: Validate RAII patterns and manual memory management
+- **Buffer overflows**: Bounds checking on all buffer operations
+- **Resource exhaustion**: Proper limits and cleanup under high load
+
 ## Testing & Validation
 
-- Compare behavior with NGINX for edge cases
-- Use telnet for manual protocol testing
-- Stress testing for connection handling
-- Memory leak verification with valgrind
-- Multiple browser compatibility testing
+### Unit Testing Strategy
+- **Parser validation**: Test HTTP request parsing with various input formats
+- **Configuration testing**: Validate config file parsing and error handling
+- **RAII wrapper testing**: Ensure proper resource management
+- **State machine testing**: Verify connection state transitions
+- **Edge case testing**: Malformed inputs, boundary conditions
+
+### Integration Testing Framework
+- **Go-based test suite**: Comprehensive HTTP client testing
+- **NGINX behavioral comparison**: Reference implementation validation
+- **Multi-client simulation**: Concurrent connection handling
+- **Browser compatibility testing**: Real-world browser scenarios
+- **Performance benchmarking**: Load testing and resource monitoring
+
+### Manual Testing Approaches
+- **Telnet testing**: Raw HTTP protocol verification
+- **curl testing**: Command-line HTTP client validation
+- **Browser testing**: Chrome, Firefox, Safari compatibility
+- **Error condition testing**: Network failures, timeouts, malformed requests
+
+### Testing Tools & Commands
+```bash
+# Unit testing
+make test                    # Run unit test suite
+./build/test_parser         # Specific parser tests
+
+# Integration testing
+cd docs/integration && go test  # Full integration suite
+go test -run TestNginxComparison # NGINX comparison tests
+
+# Manual testing
+curl -v http://localhost:8080/   # Basic GET request
+telnet localhost 8080            # Raw protocol testing
+
+# Performance testing
+ab -n 1000 -c 10 http://localhost:8080/  # Apache bench
+wrk -t4 -c100 -d30s http://localhost:8080/ # Modern HTTP benchmarking
+```
+
+### Memory and Resource Validation
+- **Valgrind integration**: Memory leak detection and analysis
+- **AddressSanitizer**: Runtime memory error detection
+- **File descriptor monitoring**: Ensure proper FD cleanup
+- **Resource limit testing**: Behavior under resource constraints
 
 ## Development Environment
 
