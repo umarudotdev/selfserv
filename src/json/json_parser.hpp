@@ -8,12 +8,12 @@
  * @brief JSON value types enumeration
  */
 enum JsonType {
-  JSON_NULL,
-  JSON_BOOL,
-  JSON_NUMBER,
-  JSON_STRING,
-  JSON_ARRAY,
-  JSON_OBJECT
+  kJsonNull,
+  kJsonBool,
+  kJsonNumber,
+  kJsonString,
+  kJsonArray,
+  kJsonObject
 };
 
 /**
@@ -55,11 +55,12 @@ class JsonValue {
   virtual std::string ToString() const = 0;
 
  private:
-  JsonType m_type;
-
   // Disable copy constructor and assignment operator
   JsonValue(const JsonValue&);
   JsonValue& operator=(const JsonValue&);
+
+  // Data members
+  JsonType m_type;
 };
 
 /**
@@ -223,10 +224,6 @@ class JsonParser {
   JsonValue* Parse(const std::string& json);
 
  private:
-  const char* m_start;
-  const char* m_current;
-  const char* m_end;
-
   // Parsing helper methods
   JsonValue* ParseValue();
   JsonNull* ParseNull();
@@ -251,6 +248,11 @@ class JsonParser {
   // Disable copy constructor and assignment operator
   JsonParser(const JsonParser&);
   JsonParser& operator=(const JsonParser&);
+
+  // Data members
+  const char* m_start;
+  const char* m_current;
+  const char* m_end;
 };
 
 /**
@@ -291,9 +293,10 @@ class JsonValuePtr {
   void Reset(JsonValue* value);
 
  private:
-  JsonValue* m_value;
-
   // Disable copy constructor and assignment operator
   JsonValuePtr(const JsonValuePtr&);
   JsonValuePtr& operator=(const JsonValuePtr&);
+
+  // Data members
+  JsonValue* m_value;
 };

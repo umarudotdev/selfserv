@@ -14,7 +14,7 @@ JsonValue::~JsonValue() {}
 JsonType JsonValue::GetType() const { return m_type; }
 
 // JsonNull implementation
-JsonNull::JsonNull() : JsonValue(JSON_NULL) {}
+JsonNull::JsonNull() : JsonValue(kJsonNull) {}
 
 JsonNull::~JsonNull() {}
 
@@ -23,7 +23,7 @@ JsonValue* JsonNull::Clone() const { return new JsonNull(); }
 std::string JsonNull::ToString() const { return "null"; }
 
 // JsonBool implementation
-JsonBool::JsonBool(bool value) : JsonValue(JSON_BOOL), m_value(value) {}
+JsonBool::JsonBool(bool value) : JsonValue(kJsonBool), m_value(value) {}
 
 JsonBool::~JsonBool() {}
 
@@ -34,7 +34,7 @@ std::string JsonBool::ToString() const { return m_value ? "true" : "false"; }
 bool JsonBool::GetValue() const { return m_value; }
 
 // JsonNumber implementation
-JsonNumber::JsonNumber(double value) : JsonValue(JSON_NUMBER), m_value(value) {}
+JsonNumber::JsonNumber(double value) : JsonValue(kJsonNumber), m_value(value) {}
 
 JsonNumber::~JsonNumber() {}
 
@@ -50,7 +50,7 @@ double JsonNumber::GetValue() const { return m_value; }
 
 // JsonString implementation
 JsonString::JsonString(const std::string& value)
-    : JsonValue(JSON_STRING), m_value(value) {}
+    : JsonValue(kJsonString), m_value(value) {}
 
 JsonString::~JsonString() {}
 
@@ -84,7 +84,7 @@ std::string JsonString::ToString() const {
 const std::string& JsonString::GetValue() const { return m_value; }
 
 // JsonArray implementation
-JsonArray::JsonArray() : JsonValue(JSON_ARRAY) {}
+JsonArray::JsonArray() : JsonValue(kJsonArray) {}
 
 JsonArray::~JsonArray() {
   for (size_t i = 0; i < m_values.size(); ++i) {
@@ -125,7 +125,7 @@ const JsonValue* JsonArray::GetValue(size_t index) const {
 }
 
 // JsonObject implementation
-JsonObject::JsonObject() : JsonValue(JSON_OBJECT) {}
+JsonObject::JsonObject() : JsonValue(kJsonObject) {}
 
 JsonObject::~JsonObject() {
   for (std::map<std::string, JsonValue*>::iterator it = m_values.begin();
