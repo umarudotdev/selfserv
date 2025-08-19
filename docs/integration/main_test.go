@@ -68,7 +68,7 @@ func setupTestEnvironment() error {
 // buildServer compiles the C++ webserv executable
 func buildServer() error {
 	fmt.Println("Building webserv server...")
-	
+
 	// Get project root directory
 	projectRoot, err := filepath.Abs("../..")
 	if err != nil {
@@ -78,7 +78,7 @@ func buildServer() error {
 	// Run make debug to build the server
 	cmd := exec.Command("make", "debug")
 	cmd.Dir = projectRoot
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("make failed: %w\nOutput: %s", err, output)
@@ -101,18 +101,18 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer sourceFile.Close()
-	
+
 	destFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
 	defer destFile.Close()
-	
+
 	_, err = io.Copy(destFile, sourceFile)
 	if err != nil {
 		return err
 	}
-	
+
 	// Make destination file executable
 	return os.Chmod(dst, 0755)
 }
@@ -120,24 +120,24 @@ func copyFile(src, dst string) error {
 // startServer launches the webserv process in the background
 func startServer() error {
 	fmt.Println("Starting test server...")
-	
+
 	// Get paths
 	projectRoot, _ := filepath.Abs("../..")
 	binaryPath := filepath.Join(projectRoot, "build", "webserv")
-	
+
 	// Copy binary to test-server directory like the bash script does
 	testServerDir := "test-server"
 	localBinaryPath := filepath.Join(testServerDir, "webserv")
-	
+
 	// Copy the binary
 	if err := copyFile(binaryPath, localBinaryPath); err != nil {
 		return fmt.Errorf("failed to copy binary: %w", err)
 	}
-	
+
 	// Start the server process from test-server directory
 	serverProcess = exec.Command("./webserv", "../test.conf")
 	serverProcess.Dir = testServerDir
-	
+
 	// Redirect server output to file for debugging
 	logFile, err := os.Create("test-server/server.log")
 	if err != nil {
@@ -145,7 +145,7 @@ func startServer() error {
 	}
 	serverProcess.Stdout = logFile
 	serverProcess.Stderr = logFile
-	
+
 	if err := serverProcess.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("failed to start server: %w", err)
@@ -164,10 +164,10 @@ func startServer() error {
 // waitForServerReady polls the server until it responds to requests
 func waitForServerReady() error {
 	fmt.Println("Waiting for server to be ready...")
-	
+
 	client := &http.Client{Timeout: 1 * time.Second}
 	maxAttempts := 30
-	
+
 	for i := 0; i < maxAttempts; i++ {
 		resp, err := client.Get(fmt.Sprintf("http://%s:%d/", testHost, testPort))
 		if err == nil {
@@ -175,13 +175,13 @@ func waitForServerReady() error {
 			fmt.Println("Server is ready and responding")
 			return nil
 		}
-		
+
 		if i%5 == 0 {
 			fmt.Printf("Waiting for server... (attempt %d/%d)\n", i+1, maxAttempts)
 		}
 		time.Sleep(1 * time.Second)
 	}
-	
+
 	return fmt.Errorf("server did not become ready within %d seconds", maxAttempts)
 }
 
@@ -198,7 +198,7 @@ func stopServer() {
 // teardownTestEnvironment cleans up resources
 func teardownTestEnvironment() {
 	stopServer()
-	
+
 	// Clean up any test files
 	os.Remove("test-server/server.log")
 	os.Remove("test-server/webserv")
@@ -244,7 +244,7 @@ func TestWebservAPI(t *testing.T) {
 		},
 		{
 			name:           "GetStaticFile",
-			method:         "GET", 
+			method:         "GET",
 			uri:            "/index.html",
 			requestBody:    "",
 			expectedStatus: 200,
@@ -384,25 +384,25 @@ func TestWebservAPI(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Enable parallel execution for performance
 			t.Parallel()
-			
+
 			// Run optional setup
 			if tc.setup != nil {
 				tc.setup(t)
 			}
-			
+
 			// Run optional cleanup after test completes
 			if tc.cleanup != nil {
 				defer tc.cleanup(t)
 			}
-			
+
 			// Execute the HTTP request and validate response
 			statusCode, statusText, responseBody := sendRequest(t, tc.method, tc.uri, tc.requestBody, tc.headers)
-			
+
 			// Assert status code matches expectation
 			if statusCode != tc.expectedStatus {
 				t.Errorf("Expected status %d, got %d (%s)", tc.expectedStatus, statusCode, statusText)
 			}
-			
+
 			// Assert response body contains expected content (if specified)
 			if tc.expectedBody != "" && !strings.Contains(responseBody, tc.expectedBody) {
 				t.Errorf("Expected response body to contain %q, got: %s", tc.expectedBody, responseBody)
@@ -416,37 +416,37 @@ func TestWebservAPI(t *testing.T) {
 // and parsing responses, while providing clear error reporting through *testing.T
 func sendRequest(t *testing.T, method, uri, body string, headers map[string]string) (statusCode int, statusText, responseBody string) {
 	t.Helper() // Mark this as a test helper for better error location reporting
-	
+
 	// Create HTTP request
 	var bodyReader io.Reader
 	if body != "" {
 		bodyReader = strings.NewReader(body)
 	}
-	
+
 	url := fmt.Sprintf("http://%s:%d%s", testHost, testPort, uri)
 	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
 	}
-	
+
 	// Add custom headers
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	
+
 	// Send request using test client
 	resp, err := testClient.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
-	
+
 	// Read response body
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("Failed to read response body: %v", err)
 	}
-	
+
 	return resp.StatusCode, resp.Status, string(bodyBytes)
 }
 
@@ -461,7 +461,7 @@ func TestWebservMultipartUpload(t *testing.T) {
 		expectedStatus int
 		expectedBody   string
 	}
-	
+
 	testTable := []multipartTestCase{
 		{
 			name:           "MultipartUploadSuccess",
@@ -472,7 +472,7 @@ func TestWebservMultipartUpload(t *testing.T) {
 			expectedBody:   "",
 		},
 		{
-			name:           "MultipartUploadLargeFile", 
+			name:           "MultipartUploadLargeFile",
 			fieldName:      "file",
 			fileName:       "large.txt",
 			fileContent:    strings.Repeat("Large file content ", 1000), // ~20KB
@@ -480,51 +480,51 @@ func TestWebservMultipartUpload(t *testing.T) {
 			expectedBody:   "",
 		},
 	}
-	
+
 	for _, tc := range testTable {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			
+
 			// Create multipart form data
 			var buf bytes.Buffer
 			writer := multipart.NewWriter(&buf)
-			
+
 			fileWriter, err := writer.CreateFormFile(tc.fieldName, tc.fileName)
 			if err != nil {
 				t.Fatalf("Failed to create form file: %v", err)
 			}
-			
+
 			_, err = fileWriter.Write([]byte(tc.fileContent))
 			if err != nil {
 				t.Fatalf("Failed to write file content: %v", err)
 			}
-			
+
 			err = writer.Close()
 			if err != nil {
 				t.Fatalf("Failed to close multipart writer: %v", err)
 			}
-			
+
 			// Send multipart request
 			req, err := http.NewRequest("POST", fmt.Sprintf("http://%s:%d/upload", testHost, testPort), &buf)
 			if err != nil {
 				t.Fatalf("Failed to create request: %v", err)
 			}
 			req.Header.Set("Content-Type", writer.FormDataContentType())
-			
+
 			resp, err := testClient.Do(req)
 			if err != nil {
 				t.Fatalf("Failed to send request: %v", err)
 			}
 			defer resp.Body.Close()
-			
+
 			responseBody, _ := io.ReadAll(resp.Body)
-			
+
 			// Assert status code
 			if resp.StatusCode != tc.expectedStatus {
 				t.Errorf("Expected status %d, got %d", tc.expectedStatus, resp.StatusCode)
 			}
-			
+
 			// Assert response body if specified
 			if tc.expectedBody != "" && !strings.Contains(string(responseBody), tc.expectedBody) {
 				t.Errorf("Expected response body to contain %q, got: %s", tc.expectedBody, responseBody)
@@ -540,7 +540,7 @@ func TestWebservProtocolCompliance(t *testing.T) {
 		testFunc      func(t *testing.T)
 		description   string
 	}
-	
+
 	testTable := []protocolTestCase{
 		{
 			name:        "HTTP11Protocol",
@@ -551,7 +551,7 @@ func TestWebservProtocolCompliance(t *testing.T) {
 					t.Fatalf("Failed to send request: %v", err)
 				}
 				defer resp.Body.Close()
-				
+
 				if resp.Proto != "HTTP/1.1" {
 					t.Errorf("Expected HTTP/1.1, got %s", resp.Proto)
 				}
@@ -566,7 +566,7 @@ func TestWebservProtocolCompliance(t *testing.T) {
 					t.Fatalf("Failed to connect: %v", err)
 				}
 				defer conn.Close()
-				
+
 				// Send multiple requests on same connection
 				for i := 0; i < 3; i++ {
 					request := fmt.Sprintf("GET /?req=%d HTTP/1.1\r\nHost: %s\r\nConnection: keep-alive\r\n\r\n", i, testHost)
@@ -574,7 +574,7 @@ func TestWebservProtocolCompliance(t *testing.T) {
 					if err != nil {
 						t.Fatalf("Failed to write request %d: %v", i, err)
 					}
-					
+
 					reader := bufio.NewReader(conn)
 					_, err = http.ReadResponse(reader, nil)
 					if err != nil {
@@ -592,7 +592,7 @@ func TestWebservProtocolCompliance(t *testing.T) {
 					t.Fatalf("Failed to connect: %v", err)
 				}
 				defer conn.Close()
-				
+
 				chunkedRequest := fmt.Sprintf(
 					"POST /upload HTTP/1.1\r\n"+
 						"Host: %s\r\n"+
@@ -608,19 +608,19 @@ func TestWebservProtocolCompliance(t *testing.T) {
 						"0\r\n"+
 						"\r\n",
 					testHost)
-				
+
 				_, err = conn.Write([]byte(chunkedRequest))
 				if err != nil {
 					t.Fatalf("Failed to write chunked request: %v", err)
 				}
-				
+
 				reader := bufio.NewReader(conn)
 				resp, err := http.ReadResponse(reader, nil)
 				if err != nil {
 					t.Fatalf("Failed to read response: %v", err)
 				}
 				defer resp.Body.Close()
-				
+
 				// Should not return 400 for valid chunked request
 				if resp.StatusCode == 400 {
 					t.Errorf("Server returned 400 for valid chunked request")
@@ -628,7 +628,7 @@ func TestWebservProtocolCompliance(t *testing.T) {
 			},
 		},
 	}
-	
+
 	for _, tc := range testTable {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -643,7 +643,7 @@ func TestWebservStressAndRobustness(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping stress tests in short mode")
 	}
-	
+
 	type stressTestCase struct {
 		name         string
 		numRequests  int
@@ -651,7 +651,7 @@ func TestWebservStressAndRobustness(t *testing.T) {
 		maxErrorRate float64
 		description  string
 	}
-	
+
 	testTable := []stressTestCase{
 		{
 			name:         "LightLoad",
@@ -675,35 +675,35 @@ func TestWebservStressAndRobustness(t *testing.T) {
 			description:  "Server handles heavy concurrent load",
 		},
 	}
-	
+
 	for _, tc := range testTable {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			results := make(chan error, tc.numRequests)
 			semaphore := make(chan struct{}, tc.numConcurrent)
-			
+
 			// Launch concurrent requests
 			for i := 0; i < tc.numRequests; i++ {
 				go func(id int) {
 					semaphore <- struct{}{}        // Acquire
 					defer func() { <-semaphore }() // Release
-					
+
 					resp, err := testClient.Get(fmt.Sprintf("http://%s:%d/?req=%d", testHost, testPort, id))
 					if err != nil {
 						results <- err
 						return
 					}
 					resp.Body.Close()
-					
+
 					if resp.StatusCode >= 500 {
 						results <- fmt.Errorf("request %d returned server error: %d", id, resp.StatusCode)
 						return
 					}
-					
+
 					results <- nil
 				}(i)
 			}
-			
+
 			// Collect results
 			var errors []error
 			for i := 0; i < tc.numRequests; i++ {
@@ -711,7 +711,7 @@ func TestWebservStressAndRobustness(t *testing.T) {
 					errors = append(errors, err)
 				}
 			}
-			
+
 			// Check error rate
 			errorRate := float64(len(errors)) / float64(tc.numRequests)
 			if errorRate > tc.maxErrorRate {
