@@ -125,7 +125,10 @@ http {
         
         # Upload endpoint - return method not allowed for now
         location /upload {
-            return 405 "Method Not Allowed\n";
+            limit_except POST {
+                return 405;
+            }
+            return 200 "Upload successful";
             add_header Content-Type text/plain;
         }
         
@@ -143,7 +146,7 @@ http {
         
         # CGI simulation
         location /cgi-bin/ {
-            return 200 "CGI Test Successful\nRequest Method: GET\nServer Protocol: HTTP/1.1\n";
+            return 200 "CGI Test Successful";
             add_header Content-Type text/html;
         }
         
@@ -152,7 +155,7 @@ http {
             limit_except GET POST DELETE {
                 return 405;
             }
-            return 200 "API endpoint\n";
+            return 200 "API endpoint";
             add_header Content-Type text/plain;
         }
         
@@ -187,16 +190,20 @@ func (n *NginxComparison) Start() error {
 		return fmt.Errorf("failed to generate nginx config: %v", err)
 	}
 	
+	// Get absolute path for configuration
+	absConfigPath, err := filepath.Abs(n.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute config path: %v", err)
+	}
+	
 	// Test the configuration first
-	testCmd := exec.Command(n.nginxPath, "-t", "-c", n.configPath)
-	testCmd.Dir = n.workDir
+	testCmd := exec.Command(n.nginxPath, "-t", "-c", absConfigPath)
 	if output, err := testCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("nginx config test failed: %v\nOutput: %s", err, string(output))
 	}
 	
 	// Start nginx
-	cmd := exec.Command(n.nginxPath, "-c", n.configPath)
-	cmd.Dir = n.workDir
+	cmd := exec.Command(n.nginxPath, "-c", absConfigPath)
 	
 	// Capture stderr for debugging
 	stderr, err := cmd.StderrPipe()
@@ -239,10 +246,13 @@ func (n *NginxComparison) Stop() error {
 		return nil
 	}
 	
+	// Get absolute path for configuration
+	absConfigPath, _ := filepath.Abs(n.configPath)
+	
 	// Try graceful shutdown first
-	if err := exec.Command(n.nginxPath, "-c", n.configPath, "-s", "quit").Run(); err != nil {
+	if err := exec.Command(n.nginxPath, "-c", absConfigPath, "-s", "quit").Run(); err != nil {
 		// Force stop if graceful shutdown fails
-		exec.Command(n.nginxPath, "-c", n.configPath, "-s", "stop").Run()
+		exec.Command(n.nginxPath, "-c", absConfigPath, "-s", "stop").Run()
 	}
 	
 	n.running = false

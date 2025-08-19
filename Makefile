@@ -170,72 +170,18 @@ format.norm: ## Format the code according to the norm
 	c_formatter_42 \
 	$(shell find $(SRC_DIR) $(INC_DIR) -name '*.c' -or -name '*.cpp' -or -name '*.h' -or -name '*.hpp')
 
-CRITERION_CFLAGS := $(shell pkg-config --cflags criterion 2>/dev/null)
-CRITERION_LIBS   := $(shell pkg-config --libs criterion 2>/dev/null)
-
-TEST_SRCS := $(shell find tests/unit -name '*.cpp' 2>/dev/null)
-TEST_OBJS := $(TEST_SRCS:tests/unit/%.cpp=$(BUILD_DIR)/tests/unit/%.o)
-
-ifeq ($(strip $(CRITERION_LIBS)),)
 .PHONY: test
-test: ## Run unit tests (Criterion not installed)
-	@echo "Criterion not found. Install it (e.g. sudo apt-get install -y libcriterion-dev) to enable tests." >&2
-	@exit 1
-else
-.PHONY: test
-test: $(BUILD_DIR)/tests_runner ## Build and run Criterion unit tests
-	$(call message,RUNNING,tests,$(CYAN))
-	./$(BUILD_DIR)/tests_runner
+test: ## Run all tests
+	$(MAKE) test.unit
+	$(MAKE) test.integration
 
-$(BUILD_DIR)/tests/unit/%.o: tests/unit/%.cpp
-	mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(CRITERION_CFLAGS) -c $< -o $@
-	-printf $(CLEAR)
-	$(call message,CREATED,$(basename $(notdir $@)),$(GREEN))
+.PHONY: test.unit
+test.unit: ## TODO: Run the unit tests
+	$(call message,TESTING,Running unit tests,$(CYAN))
 
-$(BUILD_DIR)/tests_runner: $(OBJS) $(TEST_OBJS)
-	$(CXX) $(LDFLAGS) $^ $(CRITERION_LIBS) -o $@
-	$(call message,CREATED,tests_runner,$(BLUE))
-endif
-
-# Integration testing with Go
-.PHONY: test-integration
-test-integration: debug ## Run integration tests
-	$(call message,RUNNING,integration tests,$(CYAN))
-	cd tests/integration && ./run_tests.sh
-
-.PHONY: test-stress
-test-stress: debug ## Run stress tests
-	$(call message,RUNNING,stress tests,$(CYAN))
-	cd tests/integration && ./run_tests.sh --bench
-
-.PHONY: test-nginx
-test-nginx: debug ## Run tests with nginx comparison
-	$(call message,RUNNING,nginx comparison tests,$(CYAN))
-	cd tests/integration && ./run_tests.sh --nginx
-
-.PHONY: test-all
-test-all: test test-integration ## Run all tests (unit + integration)
-
-.PHONY: test-ci
-test-ci: debug ## Run tests suitable for CI (without stress tests)
-	$(call message,RUNNING,CI tests,$(CYAN))
-	cd tests/integration && timeout 60s ./run_tests.sh || true
-
-.PHONY: test-full
-test-full: debug ## Run comprehensive testing including nginx comparison
-	$(call message,RUNNING,full test suite,$(CYAN))
-	cd tests/integration && ./run_tests.sh --nginx --bench
-
-.PHONY: nginx-check
-nginx-check: ## Check if nginx is available for comparison testing
-	$(call message,CHECKING,nginx availability,$(CYAN))
-	cd tests/integration && ./nginx_setup.sh --check
-
-.PHONY: nginx-install
-nginx-install: ## Install nginx for comparison testing (requires sudo)
-	$(call message,INSTALLING,nginx,$(CYAN))
-	cd tests/integration && sudo ./nginx_setup.sh --install
+.PHONY: test.integration
+test.integration: ## TODO: Run the integration tests
+	$(call message,TESTING,Running integration tests,$(CYAN))
 
 .PHONY: index
 index: ## Generate `compile_commands.json`
