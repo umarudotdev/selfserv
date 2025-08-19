@@ -5,24 +5,24 @@
 #include <iostream>
 
 HttpRequestParser::HttpRequestParser()
-    : state_(S_REQUEST_LINE),
-      contentLength_(0),
-      consumed_(0),
-      chunked_(false),
-      headerEndOffset_(0),
-      chunkState_(CHUNK_SIZE),
-      currentChunkSize_(0),
-      currentChunkRead_(0) {}
+    : m_state(kStateRequestLine),
+      m_contentLength(0),
+      m_consumed(0),
+      m_chunked(false),
+      m_headerEndOffset(0),
+      m_chunkState(kChunkSize),
+      m_currentChunkSize(0),
+      m_currentChunkRead(0) {}
 
-void HttpRequestParser::reset() {
-  state_ = S_REQUEST_LINE;
-  contentLength_ = 0;
-  consumed_ = 0;
-  chunked_ = false;
-  headerEndOffset_ = 0;
-  chunkState_ = CHUNK_SIZE;
-  currentChunkSize_ = 0;
-  currentChunkRead_ = 0;
+void HttpRequestParser::Reset() {
+  m_state = kStateRequestLine;
+  m_contentLength = 0;
+  m_consumed = 0;
+  m_chunked = false;
+  m_headerEndOffset = 0;
+  m_chunkState = kChunkSize;
+  m_currentChunkSize = 0;
+  m_currentChunkRead = 0;
 }
 
 static std::string trim(const std::string &s) {
@@ -37,14 +37,14 @@ static std::string trim(const std::string &s) {
   return s.substr(a, b - a);
 }
 
-bool HttpRequestParser::parse(const std::string &data, HttpRequest &req) {
-  if (state_ == S_DONE || state_ == S_ERROR) return req.complete;
+bool HttpRequestParser::Parse(const std::string &data, HttpRequest &req) {
+  if (m_state == kStateDone || m_state == kStateError) return req.complete;
   size_t hdrEnd = data.find("\r\n\r\n");
-  if (state_ == S_REQUEST_LINE || state_ == S_HEADERS) {
+  if (m_state == kStateRequestLine || m_state == kStateHeaders) {
     if (hdrEnd == std::string::npos) return false;  // need more
     if (hdrEnd > 8192) {
-      state_ = S_ERROR;
-      consumed_ = hdrEnd;
+      m_state = kStateError;
+      m_consumed = hdrEnd;
       return false;
     }
     std::string headersPart = data.substr(0, hdrEnd);
@@ -59,14 +59,14 @@ bool HttpRequestParser::parse(const std::string &data, HttpRequest &req) {
         first = false;
         size_t m1 = line.find(' ');
         if (m1 == std::string::npos) {
-          state_ = S_ERROR;
-          consumed_ = eol;
+          m_state = kStateError;
+          m_consumed = eol;
           return false;
         }
         size_t m2 = line.find(' ', m1 + 1);
         if (m2 == std::string::npos) {
-          state_ = S_ERROR;
-          consumed_ = eol;
+          m_state = kStateError;
+          m_consumed = eol;
           return false;
         }
         req.method = line.substr(0, m1);
@@ -80,28 +80,28 @@ bool HttpRequestParser::parse(const std::string &data, HttpRequest &req) {
           h.value = trim(line.substr(colon + 1));
           req.headers.push_back(h);
           if (h.name == "Content-Length") {
-            contentLength_ = (size_t)std::atoi(h.value.c_str());
+            m_contentLength = (size_t)std::atoi(h.value.c_str());
           }
           if (h.name == "Transfer-Encoding" && h.value == "chunked") {
-            chunked_ = true;
+            m_chunked = true;
           }
         }
       }
     }
-    state_ = S_BODY;
-    headerEndOffset_ = hdrEnd + 4;
+    m_state = kStateBody;
+    m_headerEndOffset = hdrEnd + 4;
   }
-  if (state_ == S_BODY) {
-    if (chunked_) {
+  if (m_state == kStateBody) {
+    if (m_chunked) {
       // Decode incrementally
-      size_t p =
-          headerEndOffset_ + (consumed_ ? (consumed_ - headerEndOffset_) : 0);
-      if (consumed_ < headerEndOffset_)
-        consumed_ = headerEndOffset_;  // ensure consumed covers header
-      // Use consumed_ to track raw consumed bytes
-      while (p < data.size() && chunkState_ != CHUNK_DONE &&
-             chunkState_ != CHUNK_TRAILER) {
-        if (chunkState_ == CHUNK_SIZE) {
+      size_t p = m_headerEndOffset +
+                 (m_consumed ? (m_consumed - m_headerEndOffset) : 0);
+      if (m_consumed < m_headerEndOffset)
+        m_consumed = m_headerEndOffset;  // ensure consumed covers header
+      // Use m_consumed to track raw consumed bytes
+      while (p < data.size() && m_chunkState != kChunkDone &&
+             m_chunkState != kChunkTrailer) {
+        if (m_chunkState == kChunkSize) {
           size_t lineEnd = data.find("\r\n", p);
           if (lineEnd == std::string::npos) break;  // need more
           std::string sz = data.substr(p, lineEnd - p);
@@ -117,35 +117,35 @@ bool HttpRequestParser::parse(const std::string &data, HttpRequest &req) {
             else if (c >= 'A' && c <= 'F')
               d = 10 + (c - 'A');
             else {
-              state_ = S_ERROR;
+              m_state = kStateError;
               return false;
             }
             val = (val << 4) + d;
           }
-          currentChunkSize_ = val;
-          currentChunkRead_ = 0;
+          m_currentChunkSize = val;
+          m_currentChunkRead = 0;
           p = lineEnd + 2;
-          consumed_ = p;
-          if (currentChunkSize_ == 0) {
-            chunkState_ = CHUNK_TRAILER;
+          m_consumed = p;
+          if (m_currentChunkSize == 0) {
+            m_chunkState = kChunkTrailer;
           } else
-            chunkState_ = CHUNK_DATA;
-        } else if (chunkState_ == CHUNK_DATA) {
+            m_chunkState = kChunkData;
+        } else if (m_chunkState == kChunkData) {
           size_t available = data.size() - p;
-          size_t need = currentChunkSize_ - currentChunkRead_;
+          size_t need = m_currentChunkSize - m_currentChunkRead;
           size_t take = available < need ? available : need;
           req.body.append(data, p, take);
           p += take;
-          currentChunkRead_ += take;
-          consumed_ = p;
-          if (currentChunkRead_ == currentChunkSize_) {
+          m_currentChunkRead += take;
+          m_consumed = p;
+          if (m_currentChunkRead == m_currentChunkSize) {
             if (p + 1 >= data.size()) break;  // wait for CRLF
             if (data[p] == '\r' && data[p + 1] == '\n') {
               p += 2;
-              consumed_ = p;
-              chunkState_ = CHUNK_SIZE;
+              m_consumed = p;
+              m_chunkState = kChunkSize;
             } else {
-              state_ = S_ERROR;
+              m_state = kStateError;
               return false;
             }
           } else {
@@ -153,37 +153,37 @@ bool HttpRequestParser::parse(const std::string &data, HttpRequest &req) {
           }
         }
       }
-      if (chunkState_ == CHUNK_TRAILER) {
+      if (m_chunkState == kChunkTrailer) {
         // Expect final CRLF
         if (data.size() >= p + 2) {
           if (data[p] == '\r' && data[p + 1] == '\n') {
             p += 2;
-            consumed_ = p;
-            chunkState_ = CHUNK_DONE;
-            state_ = S_DONE;
+            m_consumed = p;
+            m_chunkState = kChunkDone;
+            m_state = kStateDone;
             req.complete = true;
           } else {
-            state_ = S_ERROR;
+            m_state = kStateError;
           }
         }
       }
-      if (chunkState_ == CHUNK_DONE) {
+      if (m_chunkState == kChunkDone) {
         return true;
       }
     } else {
-      size_t bodyStart = headerEndOffset_;
+      size_t bodyStart = m_headerEndOffset;
       size_t have = data.size() - bodyStart;
-      if (have < contentLength_) {
+      if (have < m_contentLength) {
         // debug incomplete body
-        if (contentLength_ > 0 && have > 0) {
+        if (m_contentLength > 0 && have > 0) {
           std::cerr << "[PARSER] waiting body have=" << have
-                    << " needed=" << contentLength_ << "\n";
+                    << " needed=" << m_contentLength << "\n";
         }
       }
-      if (have >= contentLength_) {
-        req.body = data.substr(bodyStart, contentLength_);
-        consumed_ = bodyStart + contentLength_;
-        state_ = S_DONE;
+      if (have >= m_contentLength) {
+        req.body = data.substr(bodyStart, m_contentLength);
+        m_consumed = bodyStart + m_contentLength;
+        m_state = kStateDone;
         req.complete = true;
       }
     }

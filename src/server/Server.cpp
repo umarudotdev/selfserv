@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -37,13 +38,13 @@ static std::string buildRedirect(int code, const std::string &reason,
 static std::string loadErrorPageBody(const ServerConfig &sc, int code,
                                      const std::string &fallback);
 
-Server::Server(const Config &cfg) : config_(cfg) {}
+Server::Server(const Config &cfg) : m_config(cfg) {}
 
-bool Server::init() { return openListeningSockets(); }
+bool Server::Init() { return OpenListeningSockets(); }
 
-bool Server::openListeningSockets() {
-  for (size_t i = 0; i < config_.servers.size(); ++i) {
-    const ServerConfig &sc = config_.servers[i];
+bool Server::OpenListeningSockets() {
+  for (size_t i = 0; i < m_config.servers.size(); ++i) {
+    const ServerConfig &sc = m_config.servers[i];
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
       std::perror("socket");
@@ -72,17 +73,17 @@ bool Server::openListeningSockets() {
       ::close(fd);
       return false;
     }
-    listenSockets_.push_back(FD(fd));
+    m_listenSockets.push_back(FD(fd));
   }
   return true;
 }
 
-bool Server::pollOnce(int timeoutMs) {
-  buildPollFds(pfds_);
-  if (pfds_.empty()) return true;  // nothing to poll
-  int dyn = computePollTimeout();
+bool Server::PollOnce(int timeoutMs) {
+  BuildPollFds(m_pfds);
+  if (m_pfds.empty()) return true;  // nothing to poll
+  int dyn = ComputePollTimeout();
   if (dyn >= 0 && (timeoutMs < 0 || dyn < timeoutMs)) timeoutMs = dyn;
-  int ret = ::poll(&pfds_[0], pfds_.size(), timeoutMs);
+  int ret = ::poll(&m_pfds[0], m_pfds.size(), timeoutMs);
   if (ret < 0) {
     std::perror("poll");
     return false;
@@ -90,27 +91,28 @@ bool Server::pollOnce(int timeoutMs) {
   return true;
 }
 
-int Server::computePollTimeout() const {
-  if (clients_.empty()) return -1;
+int Server::ComputePollTimeout() const {
+  if (m_clients.empty()) return -1;
   unsigned long nowMs = (unsigned long)std::time(0) * 1000UL;
   long best = -1;
-  for (std::map<int, ClientConnection>::const_iterator it = clients_.begin();
-       it != clients_.end(); ++it) {
+  for (std::map<int, ClientConnection>::const_iterator it = m_clients.begin();
+       it != m_clients.end(); ++it) {
     const ClientConnection &c = it->second;
     unsigned long deadline = 0;
-    if (!c.headersComplete) {
+    if (!c.m_headersComplete) {
       // Can't know virtual host yet; use first server's header timeout
-      const ServerConfig &scHdr = config_.servers[0];
-      deadline = c.createdAtMs + (unsigned long)scHdr.headerTimeoutMs;
+      const ServerConfig &scHdr = m_config.servers[0];
+      deadline = c.m_createdAtMs + (unsigned long)scHdr.headerTimeoutMs;
     } else {
       const ServerConfig &scRef =
-          (c.serverIndex >= 0 && (size_t)c.serverIndex < config_.servers.size())
-              ? config_.servers[c.serverIndex]
-              : config_.servers[0];
-      if (!c.bodyComplete)
-        deadline = c.lastActivityMs + (unsigned long)scRef.bodyTimeoutMs;
-      else if (c.keepAlive)
-        deadline = c.lastActivityMs + (unsigned long)scRef.idleTimeoutMs;
+          (c.m_serverIndex >= 0 &&
+           (size_t)c.m_serverIndex < m_config.servers.size())
+              ? m_config.servers[c.m_serverIndex]
+              : m_config.servers[0];
+      if (!c.m_bodyComplete)
+        deadline = c.m_lastActivityMs + (unsigned long)scRef.bodyTimeoutMs;
+      else if (c.m_keepAlive)
+        deadline = c.m_lastActivityMs + (unsigned long)scRef.idleTimeoutMs;
     }
     if (deadline) {
       long remain = (long)deadline - (long)nowMs;
@@ -121,105 +123,106 @@ int Server::computePollTimeout() const {
   return (int)(best);
 }
 
-void Server::processEvents() {
+void Server::ProcessEvents() {
   // Sweep for timeouts before handling events
   unsigned long nowMs = (unsigned long)std::time(0) * 1000UL;
-  std::map<int, ClientConnection>::iterator itSweep = clients_.begin();
-  while (itSweep != clients_.end()) {
+  std::map<int, ClientConnection>::iterator itSweep = m_clients.begin();
+  while (itSweep != m_clients.end()) {
     ClientConnection &c = itSweep->second;
     bool closeIt = false;
     // CGI timeout check
-    if (c.cgiActive && c.serverIndex >= 0 &&
-        (size_t)c.serverIndex < config_.servers.size()) {
-      const ServerConfig &scSrv = config_.servers[c.serverIndex];
-      if (scSrv.cgiTimeoutMs > 0 && c.cgiStartMs > 0) {
+    if (c.m_cgiActive && c.m_serverIndex >= 0 &&
+        (size_t)c.m_serverIndex < m_config.servers.size()) {
+      const ServerConfig &scSrv = m_config.servers[c.m_serverIndex];
+      if (scSrv.cgiTimeoutMs > 0 && c.m_cgiStartMs > 0) {
         unsigned long nowMsLocal = nowMs;
-        if (nowMsLocal - c.cgiStartMs > (unsigned long)scSrv.cgiTimeoutMs) {
-          std::cerr << "[cgi-timeout] pid=" << c.cgiPid
+        if (nowMsLocal - c.m_cgiStartMs > (unsigned long)scSrv.cgiTimeoutMs) {
+          std::cerr << "[cgi-timeout] pid=" << c.m_cgiPid
                     << " fd=" << itSweep->first << "\n";
-          if (c.cgiPid > 0) ::kill(c.cgiPid, SIGKILL);
-          reapCgi(c);
-          c.keepAlive = false;
-          c.writeBuf = buildResponse(504, "Gateway Timeout",
-                                     "504 Gateway Timeout (CGI)\n",
-                                     "text/plain", false, false);
-          c.phase = ClientConnection::PH_RESPOND;
-          c.wantWrite = true;
+          if (c.m_cgiPid > 0) ::kill(c.m_cgiPid, SIGKILL);
+          ReapCgi(c);
+          c.m_keepAlive = false;
+          c.m_writeBuf = buildResponse(504, "Gateway Timeout",
+                                       "504 Gateway Timeout (CGI)\n",
+                                       "text/plain", false, false);
+          c.m_phase = ClientConnection::kPhaseRespond;
+          c.m_wantWrite = true;
         }
       }
     }
     // timeouts (use per-virtual-host once known)
-    if (!c.headersComplete) {
-      const ServerConfig &scHdr = config_.servers[0];
+    if (!c.m_headersComplete) {
+      const ServerConfig &scHdr = m_config.servers[0];
       if (scHdr.headerTimeoutMs > 0 &&
-          nowMs - c.createdAtMs > (unsigned long)scHdr.headerTimeoutMs)
+          nowMs - c.m_createdAtMs > (unsigned long)scHdr.headerTimeoutMs)
         closeIt = true;
     } else {
       const ServerConfig &scRef =
-          (c.serverIndex >= 0 && (size_t)c.serverIndex < config_.servers.size())
-              ? config_.servers[c.serverIndex]
-              : config_.servers[0];
-      if (!c.bodyComplete) {
+          (c.m_serverIndex >= 0 &&
+           (size_t)c.m_serverIndex < m_config.servers.size())
+              ? m_config.servers[c.m_serverIndex]
+              : m_config.servers[0];
+      if (!c.m_bodyComplete) {
         if (scRef.bodyTimeoutMs > 0 &&
-            nowMs - c.lastActivityMs > (unsigned long)scRef.bodyTimeoutMs)
+            nowMs - c.m_lastActivityMs > (unsigned long)scRef.bodyTimeoutMs)
           closeIt = true;
-      } else if (c.keepAlive && scRef.idleTimeoutMs > 0 &&
-                 nowMs - c.lastActivityMs >
+      } else if (c.m_keepAlive && scRef.idleTimeoutMs > 0 &&
+                 nowMs - c.m_lastActivityMs >
                      (unsigned long)scRef.idleTimeoutMs) {
         closeIt = true;
       }
     }
     if (closeIt) {
       int fd = itSweep->first;
-      if (!c.headersComplete || !c.bodyComplete) {
+      if (!c.m_headersComplete || !c.m_bodyComplete) {
         std::cerr << "[timeout] fd=" << fd << " sending 408\n";
-        if (c.writeBuf.empty()) {
-          c.writeBuf =
+        if (c.m_writeBuf.empty()) {
+          c.m_writeBuf =
               buildResponse(408, "Request Timeout", "408 Request Timeout\n",
                             "text/plain", false, false);
-          c.wantWrite = true;
+          c.m_wantWrite = true;
         }
       } else {
         std::cerr << "[idle-timeout] fd=" << fd << " closing keep-alive\n";
       }
-      c.keepAlive = false;
-      c.phase = ClientConnection::PH_CLOSING;
+      c.m_keepAlive = false;
+      c.m_phase = ClientConnection::kPhaseClosing;
       ++itSweep;  // leave connection to flush
     } else {
       ++itSweep;
     }
   }
-  for (size_t i = 0; i < pfds_.size(); ++i) {
-    struct pollfd &p = pfds_[i];
+  for (size_t i = 0; i < m_pfds.size(); ++i) {
+    struct pollfd &p = m_pfds[i];
     if (!p.revents) continue;
     bool isListen = false;
-    for (size_t j = 0; j < listenSockets_.size(); ++j) {
-      if (listenSockets_[j].get() == p.fd) {
+    for (size_t j = 0; j < m_listenSockets.size(); ++j) {
+      if (m_listenSockets[j].Get() == p.fd) {
         isListen = true;
         break;
       }
     }
     // Check CGI fds first
     if (!isListen) {
-      if (cgiFdToClient_.find(p.fd) != cgiFdToClient_.end()) {
-        handleCgiEvent(p.fd, p.revents);
+      if (m_cgiFdToClient.find(p.fd) != m_cgiFdToClient.end()) {
+        HandleCgiEvent(p.fd, p.revents);
         continue;
       }
     }
     if (isListen && (p.revents & POLLIN)) {
-      acceptNew(p.fd);
+      AcceptNew(p.fd);
     } else {
-      std::map<int, ClientConnection>::iterator it = clients_.find(p.fd);
-      if (it != clients_.end()) {
-        if (p.revents & POLLIN) handleReadable(it->second);
-        if (p.revents & POLLOUT) handleWritable(it->second);
-        if (p.revents & (POLLHUP | POLLERR)) closeConnection(p.fd);
+      std::map<int, ClientConnection>::iterator it = m_clients.find(p.fd);
+      if (it != m_clients.end()) {
+        if (p.revents & POLLIN) HandleReadable(it->second);
+        if (p.revents & POLLOUT) HandleWritable(it->second);
+        if (p.revents & (POLLHUP | POLLERR)) CloseConnection(p.fd);
       }
     }
   }
 }
 
-void Server::acceptNew(int listenFd) {
+void Server::AcceptNew(int listenFd) {
   for (;;) {
     int cfd = ::accept(listenFd, 0, 0);
     if (cfd < 0) {
@@ -230,16 +233,16 @@ void Server::acceptNew(int listenFd) {
       continue;
     }
     ClientConnection conn;
-    conn.fd.reset(cfd);
-    conn.wantWrite = false;
+    conn.m_fd.Reset(cfd);
+    conn.m_wantWrite = false;
     unsigned long nowMs = (unsigned long)(std::time(0)) * 1000UL;  // coarse
-    conn.createdAtMs = nowMs;
-    conn.lastActivityMs = nowMs;
-    conn.headersComplete = false;
-    conn.bodyComplete = false;
-    conn.phase = ClientConnection::PH_ACCEPTED;
-    clients_[cfd] = conn;
-    std::cerr << "[accept] fd=" << cfd << " total_clients=" << clients_.size()
+    conn.m_createdAtMs = nowMs;
+    conn.m_lastActivityMs = nowMs;
+    conn.m_headersComplete = false;
+    conn.m_bodyComplete = false;
+    conn.m_phase = ClientConnection::kPhaseAccepted;
+    m_clients[cfd] = conn;
+    std::cerr << "[accept] fd=" << cfd << " total_clients=" << m_clients.size()
               << "\n";
   }
 }
@@ -587,113 +590,116 @@ static bool hasHeader(const HttpRequest &req, const char *name,
   return false;
 }
 
-void Server::handleReadable(ClientConnection &conn) {
+void Server::HandleReadable(ClientConnection &conn) {
   char buf[4096];
   for (;;) {
-    ssize_t n = ::recv(conn.fd.get(), buf, sizeof(buf), 0);
+    ssize_t n = ::recv(conn.m_fd.Get(), buf, sizeof(buf), 0);
     if (n <= 0) break;  // EAGAIN or closed
-    conn.readBuf.append(buf, n);
-    conn.lastActivityMs = (unsigned long)std::time(0) * 1000UL;
-    if (conn.readBuf.size() < 2048) {
+    conn.m_readBuf.append(buf, n);
+    conn.m_lastActivityMs = (unsigned long)std::time(0) * 1000UL;
+    if (conn.m_readBuf.size() < 2048) {
       // lightweight debug
-      if (conn.readBuf.find("POST /upload") != std::string::npos) {
+      if (conn.m_readBuf.find("POST /upload") != std::string::npos) {
         std::cerr << "[DBG] recv bytes=" << n
-                  << " total=" << conn.readBuf.size() << " first100='"
-                  << conn.readBuf.substr(
-                         0, (conn.readBuf.size() < 100 ? conn.readBuf.size()
-                                                       : 100))
+                  << " total=" << conn.m_readBuf.size() << " first100='"
+                  << conn.m_readBuf.substr(
+                         0, (conn.m_readBuf.size() < 100 ? conn.m_readBuf.size()
+                                                         : 100))
                   << "'\n";
       }
     }
-    if (conn.parser.parse(conn.readBuf, conn.request) || conn.parser.error()) {
+    if (conn.m_parser.Parse(conn.m_readBuf, conn.m_request) ||
+        conn.m_parser.Error()) {
       // Future: if request requires CGI, transition to PH_HANDLE then spawn CGI
       // before PH_RESPOND
-      if (conn.parser.error()) {
-        conn.keepAlive = false;
-        const ServerConfig &scTmp = config_.servers[0];
+      if (conn.m_parser.Error()) {
+        conn.m_keepAlive = false;
+        const ServerConfig &scTmp = m_config.servers[0];
         std::string bodyErr =
             loadErrorPageBody(scTmp, 400, "400 Bad Request\n");
-        conn.writeBuf = buildResponse(400, "Bad Request", bodyErr, "text/plain",
-                                      false, false);
-        conn.phase = ClientConnection::PH_RESPOND;
-        std::cerr << "[400] malformed request bytes=" << conn.readBuf.size()
+        conn.m_writeBuf = buildResponse(400, "Bad Request", bodyErr,
+                                        "text/plain", false, false);
+        conn.m_phase = ClientConnection::kPhaseRespond;
+        std::cerr << "[400] malformed request bytes=" << conn.m_readBuf.size()
                   << "\n";
-        conn.wantWrite = true;
+        conn.m_wantWrite = true;
         break;
       }
-      conn.headersComplete = true;  // we have at least parsed headers (parser
-                                    // only flips after full body though)
-      if (conn.phase == ClientConnection::PH_ACCEPTED)
-        conn.phase = ClientConnection::PH_HEADERS;
+      conn.m_headersComplete = true;  // we have at least parsed headers (parser
+                                      // only flips after full body though)
+      if (conn.m_phase == ClientConnection::kPhaseAccepted)
+        conn.m_phase = ClientConnection::kPhaseHeaders;
       size_t serverIdx = 0;
-      const ServerConfig &sc = selectServer(config_, conn.request, serverIdx);
-      conn.serverIndex = (int)serverIdx;
-      if (conn.request.body.size() > sc.clientMaxBodySize) {
-        conn.keepAlive = false;
+      const ServerConfig &sc =
+          selectServer(m_config, conn.m_request, serverIdx);
+      conn.m_serverIndex = (int)serverIdx;
+      if (conn.m_request.body.size() > sc.clientMaxBodySize) {
+        conn.m_keepAlive = false;
         std::string body413 =
             loadErrorPageBody(sc, 413, "413 Payload Too Large\n");
-        conn.writeBuf = buildResponse(413, "Payload Too Large", body413,
-                                      "text/plain", false, false);
-        conn.phase = ClientConnection::PH_RESPOND;
-        std::cerr << "[413] body_size=" << conn.request.body.size()
+        conn.m_writeBuf = buildResponse(413, "Payload Too Large", body413,
+                                        "text/plain", false, false);
+        conn.m_phase = ClientConnection::kPhaseRespond;
+        std::cerr << "[413] body_size=" << conn.m_request.body.size()
                   << " limit=" << sc.clientMaxBodySize << "\n";
-        conn.wantWrite = true;
+        conn.m_wantWrite = true;
         break;
       }
-      const RouteConfig *route = matchRoute(sc, conn.request.uri);
+      const RouteConfig *route = matchRoute(sc, conn.m_request.uri);
       if (!route) {
-        conn.keepAlive = false;
+        conn.m_keepAlive = false;
         std::string body404 = loadErrorPageBody(sc, 404, "404 Not Found\n");
-        conn.writeBuf =
+        conn.m_writeBuf =
             buildResponse(404, "Not Found", body404, "text/plain",
-                          conn.keepAlive, conn.request.method == "HEAD");
-        conn.phase = ClientConnection::PH_RESPOND;
-        std::cerr << "[404] uri=" << conn.request.uri << "\n";
+                          conn.m_keepAlive, conn.m_request.method == "HEAD");
+        conn.m_phase = ClientConnection::kPhaseRespond;
+        std::cerr << "[404] uri=" << conn.m_request.uri << "\n";
       } else {
         if (!route->methods.empty()) {
           bool ok = false;
           for (size_t i = 0; i < route->methods.size(); ++i)
-            if (route->methods[i] == conn.request.method) {
+            if (route->methods[i] == conn.m_request.method) {
               ok = true;
               break;
             }
           if (!ok) {
-            conn.keepAlive = false;
-            conn.writeBuf = buildResponse(
-                405, "Method Not Allowed", "405 Method Not Allowed\n",
-                "text/plain", conn.keepAlive, conn.request.method == "HEAD");
-            std::cerr << "[405] method=" << conn.request.method
-                      << " uri=" << conn.request.uri << "\n";
-            conn.phase = ClientConnection::PH_RESPOND;
-            conn.wantWrite = true;
+            conn.m_keepAlive = false;
+            conn.m_writeBuf = buildResponse(405, "Method Not Allowed",
+                                            "405 Method Not Allowed\n",
+                                            "text/plain", conn.m_keepAlive,
+                                            conn.m_request.method == "HEAD");
+            std::cerr << "[405] method=" << conn.m_request.method
+                      << " uri=" << conn.m_request.uri << "\n";
+            conn.m_phase = ClientConnection::kPhaseRespond;
+            conn.m_wantWrite = true;
             break;
           }
         }
-        std::string rel = conn.request.uri.substr(route->path.size());
+        std::string rel = conn.m_request.uri.substr(route->path.size());
         if (rel.empty() || rel == "/") {
           if (!route->index.empty()) rel = "/" + route->index;
         }
         // Redirect handling
         if (!route->redirect.empty()) {
-          conn.keepAlive = false;  // simpler; could keep-alive later
-          std::cerr << "[302] redirect uri=" << conn.request.uri << " -> "
+          conn.m_keepAlive = false;  // simpler; could keep-alive later
+          std::cerr << "[302] redirect uri=" << conn.m_request.uri << " -> "
                     << route->redirect << "\n";
-          conn.writeBuf =
-              buildRedirect(302, "Found", route->redirect, conn.keepAlive);
-          conn.phase = ClientConnection::PH_RESPOND;
-          conn.bodyComplete = true;
-          conn.wantWrite = true;
+          conn.m_writeBuf =
+              buildRedirect(302, "Found", route->redirect, conn.m_keepAlive);
+          conn.m_phase = ClientConnection::kPhaseRespond;
+          conn.m_bodyComplete = true;
+          conn.m_wantWrite = true;
           break;
         }
         // Basic traversal guard
         if (rel.find("..") != std::string::npos) {
-          conn.keepAlive = false;
+          conn.m_keepAlive = false;
           std::string body403 = loadErrorPageBody(sc, 403, "403 Forbidden\n");
-          conn.writeBuf =
+          conn.m_writeBuf =
               buildResponse(403, "Forbidden", body403, "text/plain",
-                            conn.keepAlive, conn.request.method == "HEAD");
-          conn.phase = ClientConnection::PH_RESPOND;
-          std::cerr << "[403] traversal attempt uri=" << conn.request.uri
+                            conn.m_keepAlive, conn.m_request.method == "HEAD");
+          conn.m_phase = ClientConnection::kPhaseRespond;
+          std::cerr << "[403] traversal attempt uri=" << conn.m_request.uri
                     << "\n";
         } else {
           std::string filePath = route->root + rel;
@@ -708,43 +714,43 @@ void Server::handleReadable(ClientConnection &conn) {
           }
           std::string body;
           if (wantsCgi) {
-            if (maybeStartCgi(conn, *route, filePath)) {
-              conn.cgiStartMs = (unsigned long)std::time(0) * 1000UL;
-              conn.phase = ClientConnection::PH_HANDLE;
-              conn.wantWrite = false;
-              std::cerr << "[CGI] started pid=" << conn.cgiPid
+            if (MaybeStartCgi(conn, *route, filePath)) {
+              conn.m_cgiStartMs = (unsigned long)std::time(0) * 1000UL;
+              conn.m_phase = ClientConnection::kPhaseHandle;
+              conn.m_wantWrite = false;
+              std::cerr << "[CGI] started pid=" << conn.m_cgiPid
                         << " script=" << filePath << "\n";
             } else {
-              conn.keepAlive = false;
+              conn.m_keepAlive = false;
               std::string body500 =
                   loadErrorPageBody(sc, 500, "500 Internal Server Error\n");
-              conn.writeBuf =
+              conn.m_writeBuf =
                   buildResponse(500, "Internal Server Error", body500,
                                 "text/plain", false, false);
-              conn.phase = ClientConnection::PH_RESPOND;
-              conn.wantWrite = true;
+              conn.m_phase = ClientConnection::kPhaseRespond;
+              conn.m_wantWrite = true;
             }
-          } else if (conn.request.method == "POST" && route->uploadsEnabled) {
+          } else if (conn.m_request.method == "POST" && route->uploadsEnabled) {
             std::string keep;
-            conn.keepAlive = false;
-            if (hasHeader(conn.request, "Connection", keep)) {
+            conn.m_keepAlive = false;
+            if (hasHeader(conn.m_request, "Connection", keep)) {
               if (keep == "keep-alive" || keep == "Keep-Alive")
-                conn.keepAlive = true;
-              if (keep == "close" || keep == "Close") conn.keepAlive = false;
-            } else if (conn.request.version == "HTTP/1.1") {
-              conn.keepAlive = true;
+                conn.m_keepAlive = true;
+              if (keep == "close" || keep == "Close") conn.m_keepAlive = false;
+            } else if (conn.m_request.version == "HTTP/1.1") {
+              conn.m_keepAlive = true;
             }
             std::string ctype;
-            hasHeader(conn.request, "Content-Type", ctype);
-            std::cerr << "[POST] uri=" << conn.request.uri << " ctype='"
-                      << ctype << "' body_size=" << conn.request.body.size()
+            hasHeader(conn.m_request, "Content-Type", ctype);
+            std::cerr << "[POST] uri=" << conn.m_request.uri << " ctype='"
+                      << ctype << "' body_size=" << conn.m_request.body.size()
                       << "\n";
             std::string destDir =
                 route->uploadPath.empty() ? route->root : route->uploadPath;
             ensureDir(destDir);
             std::string respBody = "Received POST (";
             char num[64];
-            std::sprintf(num, "%lu", (unsigned long)conn.request.body.size());
+            std::sprintf(num, "%lu", (unsigned long)conn.m_request.body.size());
             respBody += num;
             respBody += " bytes)\n";
             if (ctype.find("multipart/form-data") != std::string::npos) {
@@ -760,8 +766,8 @@ void Server::handleReadable(ClientConnection &conn) {
               }
               if (!boundary.empty()) {
                 std::vector<MultipartSavedFile> saved;
-                if (parseMultipartFormData(conn.request.body, boundary, destDir,
-                                           saved)) {
+                if (parseMultipartFormData(conn.m_request.body, boundary,
+                                           destDir, saved)) {
                   if (saved.empty())
                     respBody += "No file parts saved\n";
                   else {
@@ -793,125 +799,130 @@ void Server::handleReadable(ClientConnection &conn) {
               full += fname;
               FILE *wf = std::fopen(full.c_str(), "wb");
               if (wf) {
-                if (!conn.request.body.empty())
-                  std::fwrite(conn.request.body.data(), 1,
-                              conn.request.body.size(), wf);
+                if (!conn.m_request.body.empty())
+                  std::fwrite(conn.m_request.body.data(), 1,
+                              conn.m_request.body.size(), wf);
                 std::fclose(wf);
                 respBody += "Stored raw body as ";
                 respBody += full;
                 respBody += "\n";
               }
             }
-            conn.writeBuf = buildResponse(200, "OK", respBody, "text/plain",
-                                          conn.keepAlive, false);
-            conn.bodyComplete = true;
-            conn.phase = ClientConnection::PH_RESPOND;
+            conn.m_writeBuf = buildResponse(200, "OK", respBody, "text/plain",
+                                            conn.m_keepAlive, false);
+            conn.m_bodyComplete = true;
+            conn.m_phase = ClientConnection::kPhaseRespond;
           } else if (isDir(filePath)) {
             if (route->directoryListing) {
               if (listDir(filePath, body)) {
                 std::string keep;
-                conn.keepAlive = false;
-                if (hasHeader(conn.request, "Connection", keep)) {
+                conn.m_keepAlive = false;
+                if (hasHeader(conn.m_request, "Connection", keep)) {
                   if (keep == "keep-alive" || keep == "Keep-Alive")
-                    conn.keepAlive = true;
+                    conn.m_keepAlive = true;
                   if (keep == "close" || keep == "Close")
-                    conn.keepAlive = false;
-                } else if (conn.request.version == "HTTP/1.1") {
-                  conn.keepAlive = true;
+                    conn.m_keepAlive = false;
+                } else if (conn.m_request.version == "HTTP/1.1") {
+                  conn.m_keepAlive = true;
                 }
-                conn.writeBuf =
-                    buildResponse(200, "OK", body, "text/html", conn.keepAlive,
-                                  conn.request.method == "HEAD");
-                conn.phase = ClientConnection::PH_RESPOND;
-                std::cerr << "[200] dir listing uri=" << conn.request.uri
-                          << (conn.keepAlive ? " keep-alive" : " close")
+                conn.m_writeBuf = buildResponse(
+                    200, "OK", body, "text/html", conn.m_keepAlive,
+                    conn.m_request.method == "HEAD");
+                conn.m_phase = ClientConnection::kPhaseRespond;
+                std::cerr << "[200] dir listing uri=" << conn.m_request.uri
+                          << (conn.m_keepAlive ? " keep-alive" : " close")
                           << "\n";
               } else {
-                conn.keepAlive = false;
+                conn.m_keepAlive = false;
                 std::string body500 =
                     loadErrorPageBody(sc, 500, "500 Internal Server Error\n");
-                conn.writeBuf = buildResponse(500, "Internal Server Error",
-                                              body500, "text/plain", false,
-                                              conn.request.method == "HEAD");
-                conn.phase = ClientConnection::PH_RESPOND;
+                conn.m_writeBuf = buildResponse(
+                    500, "Internal Server Error", body500, "text/plain", false,
+                    conn.m_request.method == "HEAD");
+                conn.m_phase = ClientConnection::kPhaseRespond;
               }
             } else {
-              conn.keepAlive = false;
+              conn.m_keepAlive = false;
               std::string body403 =
                   loadErrorPageBody(sc, 403, "403 Forbidden\n");
-              conn.writeBuf =
+              conn.m_writeBuf =
                   buildResponse(403, "Forbidden", body403, "text/plain", false,
-                                conn.request.method == "HEAD");
-              conn.phase = ClientConnection::PH_RESPOND;
+                                conn.m_request.method == "HEAD");
+              conn.m_phase = ClientConnection::kPhaseRespond;
             }
-          } else if (conn.request.method == "DELETE") {
+          } else if (conn.m_request.method == "DELETE") {
             // Handle deletion of file
             struct stat st;
             if (::stat(filePath.c_str(), &st) == 0 && S_ISREG(st.st_mode)) {
               if (::unlink(filePath.c_str()) == 0) {
                 std::string keep;
-                conn.keepAlive = false;
-                if (hasHeader(conn.request, "Connection", keep)) {
+                conn.m_keepAlive = false;
+                if (hasHeader(conn.m_request, "Connection", keep)) {
                   if (keep == "keep-alive" || keep == "Keep-Alive")
-                    conn.keepAlive = true;
+                    conn.m_keepAlive = true;
                   if (keep == "close" || keep == "Close")
-                    conn.keepAlive = false;
-                } else if (conn.request.version == "HTTP/1.1") {
-                  conn.keepAlive = true;
+                    conn.m_keepAlive = false;
+                } else if (conn.m_request.version == "HTTP/1.1") {
+                  conn.m_keepAlive = true;
                 }
-                conn.writeBuf = buildResponse(
-                    204, "No Content", "", "text/plain", conn.keepAlive, false);
-                conn.phase = ClientConnection::PH_RESPOND;
-                std::cerr << "[204] deleted uri=" << conn.request.uri << "\n";
+                conn.m_writeBuf =
+                    buildResponse(204, "No Content", "", "text/plain",
+                                  conn.m_keepAlive, false);
+                conn.m_phase = ClientConnection::kPhaseRespond;
+                std::cerr << "[204] deleted uri=" << conn.m_request.uri << "\n";
               } else {
-                conn.keepAlive = false;
+                conn.m_keepAlive = false;
                 std::string body500 =
                     loadErrorPageBody(sc, 500, "500 Internal Server Error\n");
-                conn.writeBuf =
+                conn.m_writeBuf =
                     buildResponse(500, "Internal Server Error", body500,
                                   "text/plain", false, false);
-                conn.phase = ClientConnection::PH_RESPOND;
-                std::cerr << "[500] delete failed uri=" << conn.request.uri
+                conn.m_phase = ClientConnection::kPhaseRespond;
+                std::cerr << "[500] delete failed uri=" << conn.m_request.uri
                           << " errno=" << errno << "\n";
               }
             } else if (isDir(filePath)) {
-              conn.keepAlive = false;
+              conn.m_keepAlive = false;
               std::string body403 =
                   loadErrorPageBody(sc, 403, "403 Forbidden\n");
-              conn.writeBuf = buildResponse(403, "Forbidden", body403,
-                                            "text/plain", false, false);
-              conn.phase = ClientConnection::PH_RESPOND;
+              conn.m_writeBuf = buildResponse(403, "Forbidden", body403,
+                                              "text/plain", false, false);
+              conn.m_phase = ClientConnection::kPhaseRespond;
             } else {
-              conn.keepAlive = false;
+              conn.m_keepAlive = false;
               std::string body404f =
                   loadErrorPageBody(sc, 404, "404 Not Found\n");
-              conn.writeBuf = buildResponse(404, "Not Found", body404f,
-                                            "text/plain", false, false);
-              conn.phase = ClientConnection::PH_RESPOND;
+              conn.m_writeBuf = buildResponse(404, "Not Found", body404f,
+                                              "text/plain", false, false);
+              conn.m_phase = ClientConnection::kPhaseRespond;
             }
           } else if (readFile(filePath, body)) {
             std::string keep;
-            conn.keepAlive = false;
-            if (hasHeader(conn.request, "Connection", keep)) {
+            conn.m_keepAlive = false;
+            if (hasHeader(conn.m_request, "Connection", keep)) {
               if (keep == "keep-alive" || keep == "Keep-Alive")
-                conn.keepAlive = true;
-              if (keep == "close" || keep == "Close") conn.keepAlive = false;
-            } else if (conn.request.version == "HTTP/1.1") {
-              conn.keepAlive = true;  // default for 1.1 unless close specified
+                conn.m_keepAlive = true;
+              if (keep == "close" || keep == "Close") conn.m_keepAlive = false;
+            } else if (conn.m_request.version == "HTTP/1.1") {
+              conn.m_keepAlive =
+                  true;  // default for 1.1 unless close specified
             }
-            if (conn.request.method == "GET" || conn.request.method == "HEAD") {
-              conn.writeBuf =
-                  buildResponse(200, "OK", body, guessType(filePath),
-                                conn.keepAlive, conn.request.method == "HEAD");
-              std::cerr << "[200] uri=" << conn.request.uri
+            if (conn.m_request.method == "GET" ||
+                conn.m_request.method == "HEAD") {
+              conn.m_writeBuf = buildResponse(
+                  200, "OK", body, guessType(filePath), conn.m_keepAlive,
+                  conn.m_request.method == "HEAD");
+              std::cerr << "[200] uri=" << conn.m_request.uri
                         << " size=" << body.size()
-                        << (conn.keepAlive ? " keep-alive" : " close") << "\n";
-              conn.bodyComplete = true;
-              conn.phase = ClientConnection::PH_RESPOND;
-            } else if (conn.request.method == "POST") {
+                        << (conn.m_keepAlive ? " keep-alive" : " close")
+                        << "\n";
+              conn.m_bodyComplete = true;
+              conn.m_phase = ClientConnection::kPhaseRespond;
+            } else if (conn.m_request.method == "POST") {
               std::string respBody = "Received POST (";
               char num[64];
-              std::sprintf(num, "%lu", (unsigned long)conn.request.body.size());
+              std::sprintf(num, "%lu",
+                           (unsigned long)conn.m_request.body.size());
               respBody += num;
               respBody += " bytes)\n";
               if (route->uploadsEnabled && !route->uploadPath.empty()) {
@@ -925,15 +936,15 @@ void Server::handleReadable(ClientConnection &conn) {
                 std::string full = base + fname;
                 FILE *wf = std::fopen(full.c_str(), "wb");
                 if (wf) {
-                  if (!conn.request.body.empty())
-                    std::fwrite(conn.request.body.data(), 1,
-                                conn.request.body.size(), wf);
+                  if (!conn.m_request.body.empty())
+                    std::fwrite(conn.m_request.body.data(), 1,
+                                conn.m_request.body.size(), wf);
                   std::fclose(wf);
                   respBody += "Stored as ";
                   respBody += fname;
                   respBody += "\n";
                   std::cerr << "[UPLOAD] saved " << full
-                            << " size=" << conn.request.body.size() << "\n";
+                            << " size=" << conn.m_request.body.size() << "\n";
                 } else {
                   respBody += "Upload save failed errno=";
                   respBody += std::strerror(errno);
@@ -942,105 +953,106 @@ void Server::handleReadable(ClientConnection &conn) {
                             << " errno=" << errno << "\n";
                 }
               }
-              conn.writeBuf = buildResponse(200, "OK", respBody, "text/plain",
-                                            conn.keepAlive, false);
-              conn.phase = ClientConnection::PH_RESPOND;
-            } else if (conn.request.method == "DELETE") {
+              conn.m_writeBuf = buildResponse(200, "OK", respBody, "text/plain",
+                                              conn.m_keepAlive, false);
+              conn.m_phase = ClientConnection::kPhaseRespond;
+            } else if (conn.m_request.method == "DELETE") {
               // Not implemented deletion semantics yet
-              conn.keepAlive = false;
+              conn.m_keepAlive = false;
               std::string body501 =
                   loadErrorPageBody(sc, 501, "501 Not Implemented\n");
-              conn.writeBuf = buildResponse(501, "Not Implemented", body501,
-                                            "text/plain", false, false);
-              conn.phase = ClientConnection::PH_RESPOND;
+              conn.m_writeBuf = buildResponse(501, "Not Implemented", body501,
+                                              "text/plain", false, false);
+              conn.m_phase = ClientConnection::kPhaseRespond;
             } else {
-              conn.keepAlive = false;
+              conn.m_keepAlive = false;
               std::string body405 =
                   loadErrorPageBody(sc, 405, "405 Method Not Allowed\n");
-              conn.writeBuf = buildResponse(405, "Method Not Allowed", body405,
-                                            "text/plain", false, false);
-              conn.phase = ClientConnection::PH_RESPOND;
+              conn.m_writeBuf =
+                  buildResponse(405, "Method Not Allowed", body405,
+                                "text/plain", false, false);
+              conn.m_phase = ClientConnection::kPhaseRespond;
             }
           } else {
-            conn.keepAlive = false;
+            conn.m_keepAlive = false;
             std::string body404g =
                 loadErrorPageBody(sc, 404, "404 Not Found\n");
-            conn.writeBuf =
-                buildResponse(404, "Not Found", body404g, "text/plain",
-                              conn.keepAlive, conn.request.method == "HEAD");
+            conn.m_writeBuf = buildResponse(404, "Not Found", body404g,
+                                            "text/plain", conn.m_keepAlive,
+                                            conn.m_request.method == "HEAD");
             std::cerr << "[404] file=" << filePath << "\n";
-            conn.phase = ClientConnection::PH_RESPOND;
+            conn.m_phase = ClientConnection::kPhaseRespond;
           }
         }
       }
-      conn.wantWrite = true;
+      conn.m_wantWrite = true;
       break;
     }
   }
 }
 
-void Server::handleWritable(ClientConnection &conn) {
-  while (!conn.writeBuf.empty()) {
-    ssize_t n =
-        ::send(conn.fd.get(), conn.writeBuf.data(), conn.writeBuf.size(), 0);
+void Server::HandleWritable(ClientConnection &conn) {
+  while (!conn.m_writeBuf.empty()) {
+    ssize_t n = ::send(conn.m_fd.Get(), conn.m_writeBuf.data(),
+                       conn.m_writeBuf.size(), 0);
     if (n <= 0) break;
-    conn.writeBuf.erase(0, n);
+    conn.m_writeBuf.erase(0, n);
   }
-  if (conn.writeBuf.empty()) {
-    if (!conn.keepAlive || conn.phase == ClientConnection::PH_CLOSING) {
-      closeConnection(conn.fd.get());
+  if (conn.m_writeBuf.empty()) {
+    if (!conn.m_keepAlive || conn.m_phase == ClientConnection::kPhaseClosing) {
+      CloseConnection(conn.m_fd.Get());
       return;
     }
     // Remove consumed bytes in case of pipelining
-    size_t consumed = conn.parser.consumed();
-    if (consumed && consumed <= conn.readBuf.size()) {
-      conn.readBuf.erase(0, consumed);
+    size_t consumed = conn.m_parser.Consumed();
+    if (consumed && consumed <= conn.m_readBuf.size()) {
+      conn.m_readBuf.erase(0, consumed);
     } else {
-      conn.readBuf.clear();
+      conn.m_readBuf.clear();
     }
-    conn.wantWrite = false;
-    conn.request = HttpRequest();
-    conn.parser.reset();
-    conn.keepAlive = false;  // will be set by next response
-    conn.phase = ClientConnection::PH_IDLE;
+    conn.m_wantWrite = false;
+    conn.m_request = HttpRequest();
+    conn.m_parser.Reset();
+    conn.m_keepAlive = false;  // will be set by next response
+    conn.m_phase = ClientConnection::kPhaseIdle;
   }
 }
 
-void Server::closeConnection(int fd) {
-  std::map<int, ClientConnection>::iterator it = clients_.find(fd);
-  if (it != clients_.end()) {
-    clients_.erase(it);
+void Server::CloseConnection(int fd) {
+  std::map<int, ClientConnection>::iterator it = m_clients.find(fd);
+  if (it != m_clients.end()) {
+    m_clients.erase(it);
   }
 }
 
-void Server::buildPollFds(std::vector<struct pollfd> &pfds) {
+void Server::BuildPollFds(std::vector<struct pollfd> &pfds) {
   pfds.clear();
-  for (size_t i = 0; i < listenSockets_.size(); ++i) {
+  for (size_t i = 0; i < m_listenSockets.size(); ++i) {
     struct pollfd p;
-    p.fd = listenSockets_[i].get();
+    p.fd = m_listenSockets[i].Get();
     p.events = POLLIN;
     p.revents = 0;
     pfds.push_back(p);
   }
-  std::map<int, ClientConnection>::iterator it = clients_.begin();
-  for (; it != clients_.end(); ++it) {
+  std::map<int, ClientConnection>::iterator it = m_clients.begin();
+  for (; it != m_clients.end(); ++it) {
     struct pollfd p;
     p.fd = it->first;
     p.events = POLLIN;
-    if (it->second.wantWrite) p.events |= POLLOUT;
+    if (it->second.m_wantWrite) p.events |= POLLOUT;
     p.revents = 0;
     pfds.push_back(p);
-    if (it->second.cgiActive) {
-      if (it->second.cgiInFd >= 0) {
+    if (it->second.m_cgiActive) {
+      if (it->second.m_cgiInFd >= 0) {
         struct pollfd pc;
-        pc.fd = it->second.cgiInFd;
+        pc.fd = it->second.m_cgiInFd;
         pc.events = POLLOUT;
         pc.revents = 0;
         pfds.push_back(pc);
       }
-      if (it->second.cgiOutFd >= 0) {
+      if (it->second.m_cgiOutFd >= 0) {
         struct pollfd pr;
-        pr.fd = it->second.cgiOutFd;
+        pr.fd = it->second.m_cgiOutFd;
         pr.events = POLLIN;
         pr.revents = 0;
         pfds.push_back(pr);
@@ -1049,12 +1061,12 @@ void Server::buildPollFds(std::vector<struct pollfd> &pfds) {
   }
 }
 
-void Server::shutdown() {
-  clients_.clear();
-  listenSockets_.clear();
+void Server::Shutdown() {
+  m_clients.clear();
+  m_listenSockets.clear();
 }
 
-bool Server::maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
+bool Server::MaybeStartCgi(ClientConnection &conn, const RouteConfig &route,
                            const std::string &filePath) {
   int inPipe[2];
   int outPipe[2];
@@ -1088,7 +1100,7 @@ bool Server::maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
       if (!scriptDir.empty()) ::chdir(scriptDir.c_str());
     }
     // Derive PATH_INFO and QUERY_STRING from original URI
-    std::string uri = conn.request.uri;
+    std::string uri = conn.m_request.uri;
     std::string query;
     size_t qpos = uri.find('?');
     if (qpos != std::string::npos) {
@@ -1100,19 +1112,19 @@ bool Server::maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
     std::string pathInfo = uri;
     // Content-Length & Type
     char lenBuf[32];
-    std::sprintf(lenBuf, "%lu", (unsigned long)conn.request.body.size());
+    std::sprintf(lenBuf, "%lu", (unsigned long)conn.m_request.body.size());
     std::string contentType;
-    for (size_t i = 0; i < conn.request.headers.size(); ++i) {
-      std::string n = conn.request.headers[i].name;
+    for (size_t i = 0; i < conn.m_request.headers.size(); ++i) {
+      std::string n = conn.m_request.headers[i].name;
       for (size_t j = 0; j < n.size(); ++j) n[j] = (char)std::tolower(n[j]);
       if (n == "content-type") {
-        contentType = conn.request.headers[i].value;
+        contentType = conn.m_request.headers[i].value;
         break;
       }
     }
     // Build environment
     std::vector<std::string> envStrs;
-    envStrs.push_back("REQUEST_METHOD=" + conn.request.method);
+    envStrs.push_back("REQUEST_METHOD=" + conn.m_request.method);
     envStrs.push_back("SCRIPT_FILENAME=" + filePath);
     envStrs.push_back("SCRIPT_NAME=" + filePath);
     envStrs.push_back("PATH_INFO=" + pathInfo);
@@ -1126,9 +1138,9 @@ bool Server::maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
     // SERVER_NAME / PORT from selected server config (best-effort)
     std::string serverName = "localhost";
     std::string serverPort = "80";
-    if (conn.serverIndex >= 0 &&
-        (size_t)conn.serverIndex < config_.servers.size()) {
-      const ServerConfig &scRef = config_.servers[conn.serverIndex];
+    if (conn.m_serverIndex >= 0 &&
+        (size_t)conn.m_serverIndex < m_config.servers.size()) {
+      const ServerConfig &scRef = m_config.servers[conn.m_serverIndex];
       if (!scRef.serverNames.empty())
         serverName = scRef.serverNames[0];
       else if (!scRef.host.empty())
@@ -1140,8 +1152,8 @@ bool Server::maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
     envStrs.push_back("SERVER_NAME=" + serverName);
     envStrs.push_back("SERVER_PORT=" + serverPort);
     // Pass HTTP_* headers (basic sanitization)
-    for (size_t i = 0; i < conn.request.headers.size(); ++i) {
-      const std::string &hn = conn.request.headers[i].name;
+    for (size_t i = 0; i < conn.m_request.headers.size(); ++i) {
+      const std::string &hn = conn.m_request.headers[i].name;
       if (hn.empty()) continue;
       std::string key;
       key.reserve(hn.size() + 6);
@@ -1151,7 +1163,7 @@ bool Server::maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
         if (c == '-') c = '_';
         key += (char)std::toupper((unsigned char)c);
       }
-      envStrs.push_back(key + "=" + conn.request.headers[i].value);
+      envStrs.push_back(key + "=" + conn.m_request.headers[i].value);
     }
     std::vector<char *> envp;
     for (size_t i = 0; i < envStrs.size(); ++i)
@@ -1177,57 +1189,58 @@ bool Server::maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
   ::close(outPipe[1]);
   setNonBlocking(inPipe[1]);
   setNonBlocking(outPipe[0]);
-  conn.cgiInFd = inPipe[1];
-  conn.cgiOutFd = outPipe[0];
-  conn.cgiPid = pid;
-  conn.cgiActive = true;
-  cgiFdToClient_[conn.cgiInFd] = conn.fd.get();
-  cgiFdToClient_[conn.cgiOutFd] = conn.fd.get();
+  conn.m_cgiInFd = inPipe[1];
+  conn.m_cgiOutFd = outPipe[0];
+  conn.m_cgiPid = pid;
+  conn.m_cgiActive = true;
+  m_cgiFdToClient[conn.m_cgiInFd] = conn.m_fd.Get();
+  m_cgiFdToClient[conn.m_cgiOutFd] = conn.m_fd.Get();
   return true;
 }
 
-bool Server::driveCgiIO(ClientConnection &conn) {
+bool Server::DriveCgiIO(ClientConnection &conn) {
   // write request body to CGI stdin
-  if (conn.cgiInFd >= 0 && conn.cgiWriteOffset < conn.request.body.size()) {
-    ssize_t n =
-        ::write(conn.cgiInFd, conn.request.body.data() + conn.cgiWriteOffset,
-                conn.request.body.size() - conn.cgiWriteOffset);
-    if (n > 0) conn.cgiWriteOffset += (size_t)n;
+  if (conn.m_cgiInFd >= 0 &&
+      conn.m_cgiWriteOffset < conn.m_request.body.size()) {
+    ssize_t n = ::write(conn.m_cgiInFd,
+                        conn.m_request.body.data() + conn.m_cgiWriteOffset,
+                        conn.m_request.body.size() - conn.m_cgiWriteOffset);
+    if (n > 0) conn.m_cgiWriteOffset += (size_t)n;
     if (n <= 0) { /* EAGAIN or done; do nothing now */
     }
-    if (conn.cgiWriteOffset >= conn.request.body.size()) {
-      ::close(conn.cgiInFd);
-      cgiFdToClient_.erase(conn.cgiInFd);
-      conn.cgiInFd = -1;
+    if (conn.m_cgiWriteOffset >= conn.m_request.body.size()) {
+      ::close(conn.m_cgiInFd);
+      m_cgiFdToClient.erase(conn.m_cgiInFd);
+      conn.m_cgiInFd = -1;
     }
   }
   // read CGI stdout
-  if (conn.cgiOutFd >= 0) {
+  if (conn.m_cgiOutFd >= 0) {
     for (;;) {
       char buf[4096];
-      ssize_t n = ::read(conn.cgiOutFd, buf, sizeof(buf));
-      if (n > 0) conn.cgiBuffer.append(buf, n);
+      ssize_t n = ::read(conn.m_cgiOutFd, buf, sizeof(buf));
+      if (n > 0) conn.m_cgiBuffer.append(buf, n);
       if (n <= 0) break;
     }
   }
   // check if child exited
   int status = 0;
-  pid_t r = ::waitpid(conn.cgiPid, &status, WNOHANG);
-  if (r == conn.cgiPid) {
-    if (conn.cgiOutFd >= 0) {
-      ::close(conn.cgiOutFd);
-      cgiFdToClient_.erase(conn.cgiOutFd);
-      conn.cgiOutFd = -1;
+  pid_t r = ::waitpid(conn.m_cgiPid, &status, WNOHANG);
+  if (r == conn.m_cgiPid) {
+    if (conn.m_cgiOutFd >= 0) {
+      ::close(conn.m_cgiOutFd);
+      m_cgiFdToClient.erase(conn.m_cgiOutFd);
+      conn.m_cgiOutFd = -1;
     }
-    conn.cgiActive = false;
+    conn.m_cgiActive = false;
   }
   // If output available and not yet built response, parse headers
-  if (!conn.cgiBuffer.empty() && !conn.cgiHeadersDone) {
-    size_t pos = conn.cgiBuffer.find("\r\n\r\n");
+  if (!conn.m_cgiBuffer.empty() && !conn.m_cgiHeadersDone) {
+    size_t pos = conn.m_cgiBuffer.find("\r\n\r\n");
     if (pos != std::string::npos) {
-      conn.cgiHeadersDone = true;
-      conn.cgiBodyStart = pos + 4;
-      std::string headerBlock = conn.cgiBuffer.substr(0, pos);
+      conn.m_cgiHeadersDone = true;
+      conn.m_cgiBodyStart = pos + 4;
+      std::string headerBlock = conn.m_cgiBuffer.substr(0, pos);
       int code = 200;
       std::string reason = "OK";
       std::string contentType = "text/html";
@@ -1250,7 +1263,7 @@ bool Server::driveCgiIO(ClientConnection &conn) {
           for (size_t i = 0; i < lower.size(); ++i)
             lower[i] = (char)std::tolower(lower[i]);
           if (lower == "status") {
-            int c = std::atoi(value.c_str());
+            int c = atoi(value.c_str());
             if (c >= 100 && c <= 599) code = c;
             // optional reason phrase after code
             size_t sp = value.find(' ');
@@ -1274,16 +1287,16 @@ bool Server::driveCgiIO(ClientConnection &conn) {
         else
           start = end + 2;
       }
-      std::string body = conn.cgiBuffer.substr(conn.cgiBodyStart);
+      std::string body = conn.m_cgiBuffer.substr(conn.m_cgiBodyStart);
       // Determine keep-alive
       if (connectionHdr.empty()) {
         // Derive from HTTP/1.1 default
-        conn.keepAlive = true;
+        conn.m_keepAlive = true;
       } else {
         std::string lower = connectionHdr;
         for (size_t i = 0; i < lower.size(); ++i)
           lower[i] = (char)std::tolower(lower[i]);
-        conn.keepAlive = (lower == "keep-alive");
+        conn.m_keepAlive = (lower == "keep-alive");
       }
       // Build full response manually (not using buildResponse to allow header
       // passthrough)
@@ -1328,73 +1341,73 @@ bool Server::driveCgiIO(ClientConnection &conn) {
       if (!haveCT && !contentType.empty())
         resp += "Content-Type: " + contentType + "\r\n";
       resp += "Connection: ";
-      resp += conn.keepAlive ? "keep-alive" : "close";
+      resp += conn.m_keepAlive ? "keep-alive" : "close";
       resp += "\r\n\r\n";
       resp += body;
-      conn.writeBuf = resp;
-      conn.phase = ClientConnection::PH_RESPOND;
-      conn.wantWrite = true;
+      conn.m_writeBuf = resp;
+      conn.m_phase = ClientConnection::kPhaseRespond;
+      conn.m_wantWrite = true;
       return true;
     }
   }
   // if child done and no headers, return error
-  if (!conn.cgiActive && !conn.cgiHeadersDone) {
-    conn.keepAlive = false;
-    conn.writeBuf =
+  if (!conn.m_cgiActive && !conn.m_cgiHeadersDone) {
+    conn.m_keepAlive = false;
+    conn.m_writeBuf =
         buildResponse(500, "Internal Server Error", "CGI Execution Failed\n",
                       "text/plain", false, false);
-    conn.phase = ClientConnection::PH_RESPOND;
-    conn.wantWrite = true;
+    conn.m_phase = ClientConnection::kPhaseRespond;
+    conn.m_wantWrite = true;
     return false;
   }
   return true;  // continue
 }
 
-void Server::reapCgi(ClientConnection &conn) {
-  if (conn.cgiInFd >= 0) {
-    ::close(conn.cgiInFd);
-    cgiFdToClient_.erase(conn.cgiInFd);
-    conn.cgiInFd = -1;
+void Server::ReapCgi(ClientConnection &conn) {
+  if (conn.m_cgiInFd >= 0) {
+    ::close(conn.m_cgiInFd);
+    m_cgiFdToClient.erase(conn.m_cgiInFd);
+    conn.m_cgiInFd = -1;
   }
-  if (conn.cgiOutFd >= 0) {
-    ::close(conn.cgiOutFd);
-    cgiFdToClient_.erase(conn.cgiOutFd);
-    conn.cgiOutFd = -1;
+  if (conn.m_cgiOutFd >= 0) {
+    ::close(conn.m_cgiOutFd);
+    m_cgiFdToClient.erase(conn.m_cgiOutFd);
+    conn.m_cgiOutFd = -1;
   }
-  if (conn.cgiPid > 0) {
+  if (conn.m_cgiPid > 0) {
     int st;
-    ::waitpid(conn.cgiPid, &st, WNOHANG);
+    ::waitpid(conn.m_cgiPid, &st, WNOHANG);
   }
-  conn.cgiActive = false;
+  conn.m_cgiActive = false;
 }
 
-bool Server::handleCgiEvent(int fd, short revents) {
-  std::map<int, int>::iterator it = cgiFdToClient_.find(fd);
-  if (it == cgiFdToClient_.end()) return true;
+bool Server::HandleCgiEvent(int fd, short revents) {
+  std::map<int, int>::iterator it = m_cgiFdToClient.find(fd);
+  if (it == m_cgiFdToClient.end()) return true;
   int clientFd = it->second;
-  std::map<int, ClientConnection>::iterator cit = clients_.find(clientFd);
-  if (cit == clients_.end()) {
+  std::map<int, ClientConnection>::iterator cit = m_clients.find(clientFd);
+  if (cit == m_clients.end()) {
     ::close(fd);
-    cgiFdToClient_.erase(it);
+    m_cgiFdToClient.erase(it);
     return true;
   }
   ClientConnection &conn = cit->second;
-  if (!conn.cgiActive) return true;
+  if (!conn.m_cgiActive) return true;
   if (revents & (POLLHUP | POLLERR)) {
     // mark child likely done; drive IO then close
-    driveCgiIO(conn);
-    if (conn.cgiOutFd == fd) {
-      ::close(conn.cgiOutFd);
-      cgiFdToClient_.erase(fd);
-      conn.cgiOutFd = -1;
+    DriveCgiIO(conn);
+    if (conn.m_cgiOutFd == fd) {
+      ::close(conn.m_cgiOutFd);
+      m_cgiFdToClient.erase(fd);
+      conn.m_cgiOutFd = -1;
     }
-    if (conn.cgiInFd == fd) {
-      ::close(conn.cgiInFd);
-      cgiFdToClient_.erase(fd);
-      conn.cgiInFd = -1;
+    if (conn.m_cgiInFd == fd) {
+      ::close(conn.m_cgiInFd);
+      m_cgiFdToClient.erase(fd);
+      conn.m_cgiInFd = -1;
     }
-    conn.cgiActive = false;
+    conn.m_cgiActive = false;
   }
-  if (!driveCgiIO(conn)) return false;
+  if (!DriveCgiIO(conn)) return false;
   return true;
 }

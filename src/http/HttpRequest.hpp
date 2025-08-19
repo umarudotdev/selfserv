@@ -1,4 +1,5 @@
 #pragma once
+
 #include <string>
 #include <vector>
 
@@ -14,31 +15,42 @@ struct HttpRequest {
   std::vector<HttpHeader> headers;
   std::string body;
   bool complete;
+
   HttpRequest() : complete(false) {}
 };
 
 class HttpRequestParser {
  public:
   HttpRequestParser();
-  void reset();
-  bool parse(const std::string &data, HttpRequest &req);
-  size_t consumed() const { return consumed_; }
-  bool error() const { return state_ == S_ERROR; }
+
+  void Reset();
+  bool Parse(const std::string &data, HttpRequest &request);
+  size_t Consumed() const { return m_consumed; }
+  bool Error() const { return m_state == kStateError; }
 
  private:
-  enum State { S_REQUEST_LINE, S_HEADERS, S_BODY, S_DONE, S_ERROR } state_;
-  size_t contentLength_;
-  size_t consumed_;
-  bool chunked_;
-  size_t headerEndOffset_;
+  enum State {
+    kStateRequestLine,
+    kStateHeaders,
+    kStateBody,
+    kStateDone,
+    kStateError
+  } m_state;
+
+  size_t m_contentLength;
+  size_t m_consumed;
+  bool m_chunked;
+  size_t m_headerEndOffset;
+
   // Chunked decoding state
   enum ChunkState {
-    CHUNK_SIZE,
-    CHUNK_DATA,
-    CHUNK_CRLF,
-    CHUNK_TRAILER,
-    CHUNK_DONE
-  } chunkState_;
-  size_t currentChunkSize_;
-  size_t currentChunkRead_;
+    kChunkSize,
+    kChunkData,
+    kChunkCrlf,
+    kChunkTrailer,
+    kChunkDone
+  } m_chunkState;
+
+  size_t m_currentChunkSize;
+  size_t m_currentChunkRead;
 };

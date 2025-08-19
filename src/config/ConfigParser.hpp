@@ -9,9 +9,9 @@
 class ConfigParser {
  public:
   ConfigParser();
-  bool parseFile(const char *path, Config &out);
+  bool ParseFile(const char *path, Config &out);
 
  private:
-  bool parseLine(const std::string &line, Config &out,
+  bool ParseLine(const std::string &line, Config &out,
                  ServerConfig *&currentServer);
 };

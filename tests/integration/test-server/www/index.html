@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Server Index</title>
+</head>
+<body>
+    <h1>Welcome to Test Server</h1>
+    <p>This is the index page for webserv integration testing.</p>
+
+    <h2>Test Links:</h2>
+    <ul>
+        <li><a href="/public/">Directory Listing Test</a></li>
+        <li><a href="/upload">Upload Test</a></li>
+        <li><a href="/cgi-bin/test.py">CGI Test</a></li>
+        <li><a href="/old">Redirect Test</a></li>
+        <li><a href="/nonexistent.html">404 Test</a></li>
+    </ul>
+
+    <h2>Upload Form:</h2>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" />
+        <input type="submit" value="Upload" />
+    </form>
+</body>
+</html>

@@ -7,7 +7,7 @@
 
 ConfigParser::ConfigParser() {}
 
-bool ConfigParser::parseFile(const char *path, Config &out) {
+bool ConfigParser::ParseFile(const char *path, Config &out) {
   FILE *f = std::fopen(path, "r");
   if (!f) {
     std::perror("open config");
@@ -17,7 +17,7 @@ bool ConfigParser::parseFile(const char *path, Config &out) {
   ServerConfig *current = 0;
   while (std::fgets(line, sizeof(line), f)) {
     std::string s(line);
-    if (!parseLine(s, out, current)) {
+    if (!ParseLine(s, out, current)) {
       std::cerr << "Config parse error on line: " << s;
       std::fclose(f);
       return false;
@@ -27,7 +27,7 @@ bool ConfigParser::parseFile(const char *path, Config &out) {
   return true;
 }
 
-bool ConfigParser::parseLine(const std::string &line, Config &out,
+bool ConfigParser::ParseLine(const std::string &line, Config &out,
                              ServerConfig *&currentServer) {
   if (line.empty() || line[0] == '#') return true;
   std::string::size_type start = 0;

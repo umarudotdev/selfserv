@@ -1,4 +1,5 @@
 #pragma once
+
 #include <unistd.h>
 
 // RAII wrapper for a file descriptor
@@ -6,38 +7,40 @@
 // previous.
 class FD {
  public:
-  FD() : fd_(-1) {}
-  explicit FD(int fd) : fd_(fd) {}
-  FD(const FD &other) : fd_(-1) {
-    if (other.fd_ >= 0) fd_ = ::dup(other.fd_);
+  FD() : m_fd(-1) {}
+  explicit FD(int fd) : m_fd(fd) {}
+  FD(const FD &other) : m_fd(-1) {
+    if (other.m_fd >= 0) m_fd = ::dup(other.m_fd);
   }
   FD &operator=(const FD &other) {
     if (this != &other) {
-      closeIfValid();
-      fd_ = other.fd_ >= 0 ? ::dup(other.fd_) : -1;
+      CloseIfValid();
+      m_fd = other.m_fd >= 0 ? ::dup(other.m_fd) : -1;
     }
     return *this;
   }
-  ~FD() { closeIfValid(); }
-  int get() const { return fd_; }
-  bool valid() const { return fd_ >= 0; }
-  void reset(int fd) {
-    if (fd_ == fd) return;
-    closeIfValid();
-    fd_ = fd;
+  ~FD() { CloseIfValid(); }
+
+  int Get() const { return m_fd; }
+  bool Valid() const { return m_fd >= 0; }
+  void Reset(int fd) {
+    if (m_fd == fd) return;
+    CloseIfValid();
+    m_fd = fd;
   }
-  int release() {
-    int tmp = fd_;
-    fd_ = -1;
+  int Release() {
+    int tmp = m_fd;
+    m_fd = -1;
     return tmp;
   }
 
  private:
-  void closeIfValid() {
-    if (fd_ >= 0) {
-      ::close(fd_);
-      fd_ = -1;
+  void CloseIfValid() {
+    if (m_fd >= 0) {
+      ::close(m_fd);
+      m_fd = -1;
     }
   }
-  int fd_;
+
+  int m_fd;
 };

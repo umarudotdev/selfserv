@@ -1,6 +1,7 @@
 // Entry point: initialize configuration and start event loop
 // C++98 compliant; no exceptions thrown explicitly.
 
+#include <cassert>
 #include <csignal>
 #include <cstdio>
 #include <iostream>
@@ -21,6 +22,8 @@ static std::string defaultConfigPath() {
 }
 
 int main(int argc, char **argv) {
+  assert(SELFSERV_VERSION_MAJOR == 0);
+
   std::signal(SIGINT, handle_sigint);
   std::string path;
   if (argc > 1) {
@@ -31,7 +34,7 @@ int main(int argc, char **argv) {
 
   Config config;
   ConfigParser parser;
-  if (!parser.parseFile(path.c_str(), config)) {
+  if (!parser.ParseFile(path.c_str(), config)) {
     std::cerr << "Failed to parse config: " << path << "\n";
     return 1;
   }
@@ -42,18 +45,18 @@ int main(int argc, char **argv) {
   }
 
   Server server(config);
-  if (!server.init()) {
+  if (!server.Init()) {
     std::cerr << "Server initialization failed.\n";
     return 1;
   }
 
   while (g_running) {
-    if (!server.pollOnce(1000)) {  // 1s timeout to allow signal check
+    if (!server.PollOnce(1000)) {  // 1s timeout to allow signal check
       break;                       // poll error
     }
-    server.processEvents();
+    server.ProcessEvents();
   }
 
-  server.shutdown();
+  server.Shutdown();
   return 0;
 }

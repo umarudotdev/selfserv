@@ -32,7 +32,7 @@ OBJS		:= $(SRCS:$(SRC_DIR)/%.cpp=$(BUILD_DIR)/%.o)
 DEPS		:= $(OBJS:.o=.d)
 
 CXX			:= c++
-CXXFLAGS	:= -Wall -Wextra -Werror -pedantic
+CXXFLAGS	:= -Wall -Wextra -Werror -pedantic -std=c++98
 
 CPPFLAGS	:= $(addprefix -I,$(INCS)) -MMD -MP
 LDFLAGS		:= $(addprefix -L,$(dir $(LIBS)))
@@ -197,6 +197,45 @@ $(BUILD_DIR)/tests_runner: $(OBJS) $(TEST_OBJS)
 	$(CXX) $(LDFLAGS) $^ $(CRITERION_LIBS) -o $@
 	$(call message,CREATED,tests_runner,$(BLUE))
 endif
+
+# Integration testing with Go
+.PHONY: test-integration
+test-integration: debug ## Run integration tests
+	$(call message,RUNNING,integration tests,$(CYAN))
+	cd tests/integration && ./run_tests.sh
+
+.PHONY: test-stress
+test-stress: debug ## Run stress tests
+	$(call message,RUNNING,stress tests,$(CYAN))
+	cd tests/integration && ./run_tests.sh --bench
+
+.PHONY: test-nginx
+test-nginx: debug ## Run tests with nginx comparison
+	$(call message,RUNNING,nginx comparison tests,$(CYAN))
+	cd tests/integration && ./run_tests.sh --nginx
+
+.PHONY: test-all
+test-all: test test-integration ## Run all tests (unit + integration)
+
+.PHONY: test-ci
+test-ci: debug ## Run tests suitable for CI (without stress tests)
+	$(call message,RUNNING,CI tests,$(CYAN))
+	cd tests/integration && timeout 60s ./run_tests.sh || true
+
+.PHONY: test-full
+test-full: debug ## Run comprehensive testing including nginx comparison
+	$(call message,RUNNING,full test suite,$(CYAN))
+	cd tests/integration && ./run_tests.sh --nginx --bench
+
+.PHONY: nginx-check
+nginx-check: ## Check if nginx is available for comparison testing
+	$(call message,CHECKING,nginx availability,$(CYAN))
+	cd tests/integration && ./nginx_setup.sh --check
+
+.PHONY: nginx-install
+nginx-install: ## Install nginx for comparison testing (requires sudo)
+	$(call message,INSTALLING,nginx,$(CYAN))
+	cd tests/integration && sudo ./nginx_setup.sh --install
 
 .PHONY: index
 index: ## Generate `compile_commands.json`

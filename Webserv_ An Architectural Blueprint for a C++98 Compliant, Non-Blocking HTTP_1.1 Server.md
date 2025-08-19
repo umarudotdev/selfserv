@@ -1,5 +1,24 @@
 
 
+**AI summary**  
+The document "Webserv: An Architectural Blueprint for a C++98 Compliant, Non-Blocking HTTP/1.1 Server" describes the design principles and implementation strategies for building a high-performance web server.
+
+The core architecture is an event-driven, single-threaded, non-blocking design, chosen to meet C++98 constraints and achieve high concurrency. This model contrasts with traditional multi-process or multi-threaded approaches. I/O multiplexing, specifically using poll() over select(), is fundamental for monitoring multiple sockets efficiently. A crucial component is the connection state machine, which manages the lifecycle of each HTTP transaction across multiple event loop iterations, handling non-blocking I/O operations.
+
+The server emphasizes robust resource management through the Resource Acquisition Is Initialization (RAII) idiom, especially important given the absence of modern C++ features like exceptions and standardized threading. Custom RAII wrappers like ManagedFD for file descriptors and ScopedPtr for dynamic memory are designed to prevent leaks and dangling pointers, adhering to the "Rule of Three."
+
+Webserv's behavior is configured via an NGINX-like syntax. A two-stage parser (lexer and recursive descent parser) translates this configuration into an in-memory object structure. This structure serves as a routing table, enabling virtual host matching based on server\_name and listen directives, followed by location matching based on URI patterns (exact or longest prefix).
+
+The document details a protocol-compliant request parser that operates as a re-entrant state machine to handle fragmented incoming data. It meticulously parses the Request-Line (validating method, URI, and HTTP version), headers (handling case-insensitivity and multiple headers), and message bodies (supporting Content-Length and Transfer-Encoding: chunked), while enforcing limits like client\_max\_body\_size.
+
+Response generation involves constructing a status line, essential headers (Date, Server, Content-Length, Content-Type), and the message body. The server supports serving static files (with path resolution and security checks), handling directory requests (via index files or autoindex listings), and implementing HTTP redirections (return directive).
+
+For dynamic content, Webserv integrates the Common Gateway Interface (CGI). This involves setting up inter-process communication via pipes, fork()ing a child process, redirecting its standard I/O, setting CGI environment variables (meta-variables), and executing the CGI script using execve(). The main server process manages these non-blocking pipes and monitors the child process. The CGI implementation also handles parsing the CGI script's output, distinguishing between document and redirect responses.
+
+Finally, the server addresses handling complex payloads like file uploads using multipart/form-data. It describes a streaming multipart parser that identifies boundaries, parses part headers (Content-Disposition, filename), and streams file content directly to disk without buffering the entire payload in memory, acting as an inner state machine within the main connection manager.
+
+Error handling is approached systemically without exceptions, using a Status enum and system call wrappers to centralize error checking. The strategy focuses on graceful degradation, logging client (4xx) and server (5xx) errors, and isolating faults to individual connections to ensure the server remains operational.
+
 # **Webserv: An Architectural Blueprint for a C++98 Compliant, Non-Blocking HTTP/1.1 Server**
 
 ## **I. Architectural Foundations: The Non-Blocking, Event-Driven Core**
@@ -50,6 +69,25 @@ A robust connection lifecycle can be modeled with the following states:
 * READING\_FROM\_CGI: A CGI-specific state where the server is reading the response from the standard output of the CGI process.  
 * SENDING\_RESPONSE: The complete response is buffered and is being written to the client socket. This state persists until the entire response buffer has been sent.  
 * CLOSING: The connection is marked for termination. The event loop will close its file descriptor and release all associated resources.
+
+The following diagram illustrates the flow between these connection states:
+
+Code snippet
+
+stateDiagram-v2  
+    \[\*\] \--\> AWAITING\_REQUEST: New Connection  
+    AWAITING\_REQUEST \--\> PARSING\_HEADERS: Data Received  
+    PARSING\_HEADERS \--\> READING\_BODY: Body Present  
+    PARSING\_HEADERS \--\> HANDLING\_REQUEST: No Body / Headers Complete  
+    READING\_BODY \--\> HANDLING\_REQUEST: Body Complete  
+    HANDLING\_REQUEST \--\> GENERATING\_RESPONSE: Static File / Redirect  
+    HANDLING\_REQUEST \--\> WRITING\_TO\_CGI: CGI Request  
+    WRITING\_TO\_CGI \--\> READING\_FROM\_CGI: Request Body Sent to CGI  
+    READING\_FROM\_CGI \--\> GENERATING\_RESPONSE: CGI Response Received  
+    GENERATING\_RESPONSE \--\> SENDING\_RESPONSE: Response Ready  
+    SENDING\_RESPONSE \--\> AWAITING\_REQUEST: Persistent Connection  
+    SENDING\_RESPONSE \--\> CLOSING: Connection Close  
+    CLOSING \--\> \[\*\]
 
 ## **II. C++98 Idioms for Bulletproof Resource Management**
 
@@ -206,7 +244,23 @@ The parsed configuration data structure serves as a real-time routing table for 
    * If still no match is found, or if the request lacks a Host header, the request is routed to the **default server** for that host:port. The project specification dictates that the first server block defined for a given listen address acts as the default.  
 2. **Location Matching:** After identifying the correct ServerConfig, the server must find the most appropriate LocationConfig within that server block to handle the request. This is done by matching the request's URI against the patterns in each location block. Following NGINX's algorithm, the server first checks for an exact match (e.g., location \= /path) and, if none is found, proceeds to find the longest prefix match (e.g., location /path/ would be chosen over location /).7 The rules defined in this most specific matching location block will then be applied to the request.
 
-This structured approach ensures that every request is deterministically mapped to a specific set of configuration rules, forming the basis for all subsequent processing, from serving static files to executing CGI scripts.
+This structured approach ensures that every request is deterministically mapped to a specific set of configuration rules, forming the basis for all subsequent processing, from serving static files to executing CGI scripts. The routing logic can be visualized as follows:
+
+Code snippet
+
+graph TD  
+    A \--\> B{Find Matching Server Block};  
+    B \--\> C\[Match by server\_name\];  
+    B \--\> D;  
+    C \--\> E;  
+    D \--\> E;  
+    E \--\> F{Find Matching Location Block};  
+    F \--\> G\[Exact Match ("=")\];  
+    F \--\> H\[Longest Prefix Match\];  
+    F \--\> I;  
+    G \--\> J;  
+    H \--\> J;  
+    I \--\> J;
 
 ## **IV. Deconstructing the Request: A Protocol-Compliant Parser**
 
@@ -313,6 +367,29 @@ The interaction between the server and a CGI script is a well-defined sequence o
    * These new, non-blocking file descriptors are added to the main poll() monitoring set. The connection's state is updated to reflect that it is now in a CGI-handling phase, ready to shuttle data between the client socket and the CGI pipes.  
    * The server must also monitor the child process for termination using waitpid() with the WNOHANG option to prevent creating zombie processes.
 
+A sequence diagram for this process is shown below:
+
+Code snippet
+
+sequenceDiagram  
+    participant Client  
+    participant Webserv  
+    participant CGI Process
+
+    Client-\>\>Webserv: POST /script.cgi HTTP/1.1  
+    activate Webserv  
+    Webserv-\>\>Webserv: Create Pipes (to/from CGI)  
+    Webserv-\>\>Webserv: fork()  
+    alt Child Process  
+        Webserv-\>\>CGI Process: dup2() pipes to stdin/stdout  
+        Webserv-\>\>CGI Process: Set CGI Environment Variables  
+        Webserv-\>\>CGI Process: execve("/path/to/script")  
+    end  
+    Webserv-\>\>+CGI Process: Write Request Body (via pipe)  
+    CGI Process--\>\>-Webserv: Write CGI Response (via pipe)  
+    Webserv-\>\>Client: HTTP 200 OK (with CGI output)  
+    deactivate Webserv
+
 ### **6.2. Crafting the CGI Environment (Meta-Variables)**
 
 The CGI specification defines a contract for how a server communicates request metadata to a script. This contract is fulfilled by setting a specific set of environment variables before calling execve().30 The script reads these variables to understand the context of the request. The accuracy of these variables is paramount for correct CGI script execution. The following table outlines the essential meta-variables and their corresponding sources from the HTTP request.
@@ -377,6 +454,18 @@ The parsing algorithm proceeds as follows:
 6. **Finalization:** When the next boundary is found, the temporary file is closed. The parser then repeats the process from step 3 for the next part. The entire process concludes when the final boundary delimiter (with trailing hyphens) is found.
 
 This implementation represents a dual state machine. The main connection manager, which handles the non-blocking socket I/O, acts as the outer machine. It feeds incoming data chunks to the multipart parser, which is the inner state machine. The multipart parser maintains its own state (e.g., SEEKING\_BOUNDARY, PARSING\_PART\_HEADERS, STREAMING\_PART\_DATA) to correctly interpret the structured multipart stream and manage the file I/O. This separation of concerns is key to creating a clean, robust, and memory-efficient file upload handler.
+
+The state transitions for the multipart parser are shown below:
+
+Code snippet
+
+stateDiagram-v2  
+    \[\*\] \--\> SEEKING\_BOUNDARY: Start Parsing  
+    SEEKING\_BOUNDARY \--\> PARSING\_PART\_HEADERS: Boundary Found  
+    PARSING\_PART\_HEADERS \--\> STREAMING\_PART\_DATA: Part Headers Parsed (CRLFCRLF found)  
+    STREAMING\_PART\_DATA \--\> SEEKING\_BOUNDARY: Next Boundary Found  
+    SEEKING\_BOUNDARY \--\> DONE: Final Boundary Found  
+    DONE \--\> \[\*\]
 
 ## **VIII. Systemic Resilience: A Strategy for Error Handling Without Exceptions**
 

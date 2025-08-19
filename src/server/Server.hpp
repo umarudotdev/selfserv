@@ -11,87 +11,102 @@
 #include "server/FD.hpp"
 
 struct ClientConnection {
-  FD fd;
-  std::string readBuf;
-  std::string writeBuf;
-  bool wantWrite;
-  HttpRequest request;
-  HttpRequestParser parser;
-  bool keepAlive;
-  unsigned long createdAtMs;
-  unsigned long lastActivityMs;
-  bool headersComplete;
-  bool bodyComplete;
-  bool timedOut;
-  // High level connection phase (for future extensibility / debugging)
+  // Connection state
+  FD m_fd;
+  std::string m_readBuf;
+  std::string m_writeBuf;
+  bool m_wantWrite;
+  HttpRequest m_request;
+  HttpRequestParser m_parser;
+  bool m_keepAlive;
+
+  // Timing
+  unsigned long m_createdAtMs;
+  unsigned long m_lastActivityMs;
+
+  // Protocol state
+  bool m_headersComplete;
+  bool m_bodyComplete;
+  bool m_timedOut;
+
+  // Connection phase (for debugging and state management)
   enum Phase {
-    PH_ACCEPTED,
-    PH_HEADERS,
-    PH_BODY,
-    PH_HANDLE,
-    PH_RESPOND,
-    PH_IDLE,
-    PH_CLOSING
-  } phase;
-  // CGI execution context (optional active)
-  int cgiInFd;               // write-end to CGI stdin
-  int cgiOutFd;              // read-end from CGI stdout
-  pid_t cgiPid;              // child PID
-  bool cgiActive;            // CGI process active
-  bool cgiHeadersDone;       // parsed CGI headers
-  std::string cgiBuffer;     // raw CGI output buffer
-  size_t cgiBodyStart;       // offset where body starts after headers
-  size_t cgiWriteOffset;     // how many bytes of request body written to CGI
-  unsigned long cgiStartMs;  // when CGI launched
-  int serverIndex;           // index of selected server config
+    kPhaseAccepted,
+    kPhaseHeaders,
+    kPhaseBody,
+    kPhaseHandle,
+    kPhaseRespond,
+    kPhaseIdle,
+    kPhaseClosing
+  } m_phase;
+
+  // CGI execution context
+  int m_cgiInFd;               // write-end to CGI stdin
+  int m_cgiOutFd;              // read-end from CGI stdout
+  pid_t m_cgiPid;              // child PID
+  bool m_cgiActive;            // CGI process active
+  bool m_cgiHeadersDone;       // parsed CGI headers
+  std::string m_cgiBuffer;     // raw CGI output buffer
+  size_t m_cgiBodyStart;       // offset where body starts after headers
+  size_t m_cgiWriteOffset;     // how many bytes of request body written to CGI
+  unsigned long m_cgiStartMs;  // when CGI launched
+  int m_serverIndex;           // index of selected server config
+
   ClientConnection()
-      : wantWrite(false),
-        keepAlive(false),
-        createdAtMs(0),
-        lastActivityMs(0),
-        headersComplete(false),
-        bodyComplete(false),
-        timedOut(false),
-        cgiInFd(-1),
-        cgiOutFd(-1),
-        cgiPid(-1),
-        cgiActive(false),
-        cgiHeadersDone(false),
-        cgiBodyStart(0),
-        cgiWriteOffset(0),
-        cgiStartMs(0),
-        serverIndex(0) {}
+      : m_wantWrite(false),
+        m_keepAlive(false),
+        m_createdAtMs(0),
+        m_lastActivityMs(0),
+        m_headersComplete(false),
+        m_bodyComplete(false),
+        m_timedOut(false),
+        m_phase(kPhaseAccepted),
+        m_cgiInFd(-1),
+        m_cgiOutFd(-1),
+        m_cgiPid(-1),
+        m_cgiActive(false),
+        m_cgiHeadersDone(false),
+        m_cgiBodyStart(0),
+        m_cgiWriteOffset(0),
+        m_cgiStartMs(0),
+        m_serverIndex(0) {}
 };
 
 class Server {
  public:
-  explicit Server(const Config &cfg);
-  bool init();
-  bool pollOnce(int timeoutMs);
-  int computePollTimeout() const;  // dynamic based on earliest deadline
-  void processEvents();
-  void shutdown();
+  explicit Server(const Config &config);
+
+  // Core server lifecycle
+  bool Init();
+  bool PollOnce(int timeoutMs);
+  int ComputePollTimeout() const;  // dynamic based on earliest deadline
+  void ProcessEvents();
+  void Shutdown();
 
  private:
+  // Non-copyable
   Server(const Server &);
   Server &operator=(const Server &);
 
-  bool openListeningSockets();
-  void acceptNew(int listenFd);
-  void handleReadable(ClientConnection &conn);
-  void handleWritable(ClientConnection &conn);
-  // CGI helpers (to be implemented)
-  bool maybeStartCgi(ClientConnection &conn, const RouteConfig &route,
-                     const std::string &filePath);
-  bool driveCgiIO(ClientConnection &conn);  // returns false if should close
-  void reapCgi(ClientConnection &conn);
-  void closeConnection(int fd);
-  void buildPollFds(std::vector<struct pollfd> &pfds);
-  bool handleCgiEvent(int fd, short revents);
+  // Connection management
+  bool OpenListeningSockets();
+  void AcceptNew(int listenFd);
+  void HandleReadable(ClientConnection &conn);
+  void HandleWritable(ClientConnection &conn);
+  void CloseConnection(int fd);
+  void BuildPollFds(std::vector<struct pollfd> &pfds);
 
-  const Config &config_;
-  std::vector<FD> listenSockets_;
-  std::map<int, ClientConnection> clients_;
-  std::vector<struct pollfd> pfds_;
-  std::map<int, int> cgiFdToClient_;  // map cgi pipe fd -> client fd
+  // CGI support
+  bool MaybeStartCgi(ClientConnection &conn, const RouteConfig &route,
+                     const std::string &filePath);
+  bool DriveCgiIO(ClientConnection &conn);  // returns false if should close
+  void ReapCgi(ClientConnection &conn);
+  bool HandleCgiEvent(int fd, short revents);
+
+  // Member variables
+  const Config &m_config;
+  std::vector<FD> m_listenSockets;
+  std::map<int, ClientConnection> m_clients;
+  std::vector<struct pollfd> m_pfds;
+  std::map<int, int> m_cgiFdToClient;  // map cgi pipe fd -> client fd
 };
