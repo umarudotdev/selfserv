@@ -1,200 +1,227 @@
-#include <cassert>
-#include <cstddef>
+#include "json_parser.hpp"
 #include <iostream>
-
-#include "option/option.hpp"
-#include "result/result.hpp"
-#include "selfserv.h"
-
-using selfserv::Option;
-using selfserv::Result;
+#include <exception>
 
 /**
- * Demonstrates Result<T, E> with a division function that can fail.
- * Returns either the quotient or an error message.
+ * @brief Helper function to safely cast JsonValue to specific type
  */
-Result<double, const char*> safe_divide(double a, double b) {
-  if (b == 0.0) {
-    return Result<double, const char*>::Err("Division by zero");
-  }
-  return Result<double, const char*>::Ok(a / b);
-}
-
-/**
- * Demonstrates Option<T> with a search function that may not find a value.
- * Returns Some(index) if found, None if not found.
- */
-Option<int> find_first(const int* array, int size, int value) {
-  if (array == NULL) {
-    return Option<int>::None();
-  }
-
-  for (int i = 0; i < size; ++i) {
-    if (array[i] == value) {
-      return Option<int>::Some(i);
+template<typename T>
+const T* SafeCast(const JsonValue* value, JsonType expectedType) {
+    if (!value || value->GetType() != expectedType) {
+        return NULL;
     }
-  }
-
-  return Option<int>::None();
+    return static_cast<const T*>(value);
 }
 
 /**
- * Demonstrates error propagation with nested Result operations.
+ * @brief Demonstrate parsing and accessing nested JSON data
  */
-Result<double, const char*> calculate_average(double a, double b, double c) {
-  Result<double, const char*> sum_ab =
-      safe_divide(a + b, 1.0);  // Always succeeds
-  if (sum_ab.IsErr()) return sum_ab;
-
-  Result<double, const char*> total = safe_divide(sum_ab.Unwrap() + c, 3.0);
-  return total;
+void DemonstrateValidJson() {
+    std::cout << "=== Demonstrating Valid JSON Parsing ===" << std::endl;
+    
+    // Complex JSON with nested objects and arrays
+    std::string jsonStr = 
+        "{"
+        "  \"name\": \"John Doe\","
+        "  \"age\": 30,"
+        "  \"isActive\": true,"
+        "  \"address\": {"
+        "    \"street\": \"123 Main St\","
+        "    \"city\": \"New York\","
+        "    \"zipCode\": 10001"
+        "  },"
+        "  \"hobbies\": [\"reading\", \"coding\", \"hiking\"],"
+        "  \"spouse\": null"
+        "}";
+    
+    JsonParser parser;
+    JsonValuePtr rootPtr(NULL);
+    
+    try {
+        // Parse the JSON string
+        JsonValue* root = parser.Parse(jsonStr);
+        rootPtr.Reset(root);
+        
+        std::cout << "Successfully parsed JSON!" << std::endl;
+        std::cout << "Root JSON: " << root->ToString() << std::endl << std::endl;
+        
+        // Cast to object to access nested data
+        const JsonObject* rootObj = SafeCast<JsonObject>(root, JSON_OBJECT);
+        if (!rootObj) {
+            std::cout << "Error: Root is not a JSON object" << std::endl;
+            return;
+        }
+        
+        // Access string value
+        const JsonValue* nameValue = rootObj->GetValue("name");
+        const JsonString* nameStr = SafeCast<JsonString>(nameValue, JSON_STRING);
+        if (nameStr) {
+            std::cout << "Name: " << nameStr->GetValue() << std::endl;
+        }
+        
+        // Access number value
+        const JsonValue* ageValue = rootObj->GetValue("age");
+        const JsonNumber* ageNum = SafeCast<JsonNumber>(ageValue, JSON_NUMBER);
+        if (ageNum) {
+            std::cout << "Age: " << ageNum->GetValue() << std::endl;
+        }
+        
+        // Access boolean value
+        const JsonValue* isActiveValue = rootObj->GetValue("isActive");
+        const JsonBool* isActiveBool = SafeCast<JsonBool>(isActiveValue, JSON_BOOL);
+        if (isActiveBool) {
+            std::cout << "Is Active: " << (isActiveBool->GetValue() ? "true" : "false") << std::endl;
+        }
+        
+        // Access nested object
+        const JsonValue* addressValue = rootObj->GetValue("address");
+        const JsonObject* addressObj = SafeCast<JsonObject>(addressValue, JSON_OBJECT);
+        if (addressObj) {
+            std::cout << "\nAddress Information:" << std::endl;
+            
+            const JsonValue* streetValue = addressObj->GetValue("street");
+            const JsonString* streetStr = SafeCast<JsonString>(streetValue, JSON_STRING);
+            if (streetStr) {
+                std::cout << "  Street: " << streetStr->GetValue() << std::endl;
+            }
+            
+            const JsonValue* cityValue = addressObj->GetValue("city");
+            const JsonString* cityStr = SafeCast<JsonString>(cityValue, JSON_STRING);
+            if (cityStr) {
+                std::cout << "  City: " << cityStr->GetValue() << std::endl;
+            }
+            
+            const JsonValue* zipValue = addressObj->GetValue("zipCode");
+            const JsonNumber* zipNum = SafeCast<JsonNumber>(zipValue, JSON_NUMBER);
+            if (zipNum) {
+                std::cout << "  Zip Code: " << static_cast<int>(zipNum->GetValue()) << std::endl;
+            }
+        }
+        
+        // Access array
+        const JsonValue* hobbiesValue = rootObj->GetValue("hobbies");
+        const JsonArray* hobbiesArray = SafeCast<JsonArray>(hobbiesValue, JSON_ARRAY);
+        if (hobbiesArray) {
+            std::cout << "\nHobbies:" << std::endl;
+            for (size_t i = 0; i < hobbiesArray->GetSize(); ++i) {
+                const JsonValue* hobbyValue = hobbiesArray->GetValue(i);
+                const JsonString* hobbyStr = SafeCast<JsonString>(hobbyValue, JSON_STRING);
+                if (hobbyStr) {
+                    std::cout << "  " << (i + 1) << ". " << hobbyStr->GetValue() << std::endl;
+                }
+            }
+        }
+        
+        // Access null value
+        const JsonValue* spouseValue = rootObj->GetValue("spouse");
+        if (spouseValue && spouseValue->GetType() == JSON_NULL) {
+            std::cout << "\nSpouse: null (not married)" << std::endl;
+        }
+        
+        std::cout << "\n=== Memory will be automatically cleaned up by JsonValuePtr ===" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cout << "Unexpected error: " << e.what() << std::endl;
+    }
 }
 
-int main(int /* argc */, char const* /* argv */[]) {
-  assert(SELFSERV_VERSION_MAJOR == 0);
-
-  std::cout << "=== C++98 Option<T> and Result<T,E> Demonstration ===\n\n";
-
-  // === Option<T> Demonstration ===
-  std::cout << "--- Option<T> Examples ---\n";
-
-  // Test array for search demonstrations
-  int numbers[] = {10, 20, 30, 40, 50};
-  int size = sizeof(numbers) / sizeof(numbers[0]);
-
-  // Successful search
-  Option<int> found = find_first(numbers, size, 30);
-  if (found.IsSome()) {
-    std::cout << "Found value 30 at index: " << found.Unwrap() << "\n";
-  } else {
-    std::cout << "Value 30 not found\n";
-  }
-
-  // Failed search
-  Option<int> notFound = find_first(numbers, size, 99);
-  if (notFound.IsNone()) {
-    std::cout << "Value 99 not found (as expected)\n";
-  }
-
-  // Using unwrapOr for default values
-  int index = notFound.UnwrapOr(-1);
-  std::cout << "Index of 99 (with default -1): " << index << "\n";
-
-  // Safe pointer access
-  const int* indexPtr = found.Get();
-  if (indexPtr) {
-    std::cout << "Safe access to found index: " << *indexPtr << "\n";
-  }
-
-  std::cout << "\n";
-
-  // === Result<T, E> Demonstration ===
-  std::cout << "--- Result<T,E> Examples ---\n";
-
-  // Successful division
-  Result<double, const char*> success = safe_divide(10.0, 2.0);
-  if (success.IsOk()) {
-    std::cout << "10.0 / 2.0 = " << success.Unwrap() << "\n";
-  }
-
-  // Failed division
-  Result<double, const char*> failure = safe_divide(5.0, 0.0);
-  if (failure.IsErr()) {
-    std::cout << "Division error: " << failure.UnwrapErr() << "\n";
-  }
-
-  // Using unwrapOr for error handling
-  double safeResult = failure.UnwrapOr(0.0);
-  std::cout << "Safe division result (with default 0.0): " << safeResult
-            << "\n";
-
-  // Chained operations with error propagation
-  Result<double, const char*> avg = calculate_average(6.0, 9.0, 12.0);
-  if (avg.IsOk()) {
-    std::cout << "Average of 6, 9, 12: " << avg.Unwrap() << "\n";
-  } else {
-    std::cout << "Average calculation failed: " << avg.UnwrapErr() << "\n";
-  }
-
-  std::cout << "\n";
-
-  // === Copy semantics demonstration ===
-  std::cout << "--- Copy Semantics (Rule of Three) ---\n";
-
-  Option<int> original = Option<int>::Some(42);
-  Option<int> copied = original;  // Copy constructor
-  Option<int> assigned;
-  assigned = copied;  // Assignment operator
-
-  std::cout << "Original: " << original.Unwrap() << "\n";
-  std::cout << "Copied: " << copied.Unwrap() << "\n";
-  std::cout << "Assigned: " << assigned.Unwrap() << "\n";
-
-  // Verify they are independent copies
-  original = Option<int>::Some(100);
-  std::cout << "After modifying original to 100:\n";
-  std::cout << "Original: " << original.Unwrap() << "\n";
-  std::cout << "Copied (unchanged): " << copied.Unwrap() << "\n";
-
-  std::cout << "\n--- Demonstration Complete ---\n";
-
-  return 0;
+/**
+ * @brief Demonstrate error handling with invalid JSON
+ */
+void DemonstrateInvalidJson() {
+    std::cout << "\n\n=== Demonstrating Invalid JSON Error Handling ===" << std::endl;
+    
+    // Array of invalid JSON strings to test
+    std::string invalidJsonStrings[] = {
+        "{ \"name\": \"John\", }",           // Trailing comma
+        "{ \"name\" \"John\" }",             // Missing colon
+        "{ \"name\": John }",                // Unquoted string value
+        "{ \"name\": \"John\"",              // Missing closing brace
+        "[ 1, 2, 3, ]",                     // Trailing comma in array
+        "{ \"number\": 123abc }",            // Invalid number format
+        "{ \"string\": \"unclosed string }",// Unclosed string
+        "",                                  // Empty string
+        "null null"                          // Multiple values
+    };
+    
+    size_t numTests = sizeof(invalidJsonStrings) / sizeof(invalidJsonStrings[0]);
+    
+    JsonParser parser;
+    
+    for (size_t i = 0; i < numTests; ++i) {
+        std::cout << "\nTest " << (i + 1) << ": \"" << invalidJsonStrings[i] << "\"" << std::endl;
+        
+        try {
+            JsonValue* result = parser.Parse(invalidJsonStrings[i]);
+            // If we get here, the parsing unexpectedly succeeded
+            std::cout << "  UNEXPECTED: Parsing succeeded when it should have failed!" << std::endl;
+            delete result; // Clean up
+        } catch (const std::runtime_error& e) {
+            std::cout << "  EXPECTED: Caught parse error: " << e.what() << std::endl;
+        } catch (const std::exception& e) {
+            std::cout << "  UNEXPECTED: Caught unexpected exception: " << e.what() << std::endl;
+        }
+    }
 }
 
-/*
- * === MODERN C++ COMPARISON AND RETROSPECTIVE ===
- *
- * Implementing Option<T> and Result<T,E> in C++98 required significant manual
- * work that would be dramatically simplified in modern C++ (C++11+):
- *
- * 1. **MOVE SEMANTICS (C++11):**
- *    - Our C++98 implementation only supports copy construction/assignment
- *    - Move semantics would eliminate unnecessary copies when transferring
- *      ownership of expensive-to-copy types
- *    - std::move and && references would provide zero-cost transfers
- *    - Example: Result<std::vector<Data>, Error> would be much more efficient
- *
- * 2. **std::union IMPROVEMENTS (C++11):**
- *    - C++11 allows unions with non-trivial constructors/destructors
- *    - Would eliminate our manual placement new/explicit destructor calls
- *    - std::variant (C++17) would handle the discriminated union automatically
- *    - Memory alignment would be handled automatically
- *
- * 3. **nullptr (C++11):**
- *    - Our C++98 code uses NULL (which is typically 0)
- *    - nullptr provides type safety and better overload resolution
- *    - Eliminates ambiguity between null pointers and integer zeros
- *
- * 4. **VARIADIC TEMPLATES (C++11):**
- *    - Would allow perfect forwarding for construction
- *    - Could implement emplace() methods for in-place construction
- *    - Would enable more sophisticated factory methods
- *    - Example: Option<T>::emplace(args...) for direct construction
- *
- * 5. **ADDITIONAL MODERN FEATURES:**
- *    - alignof/alignas (C++11): Proper alignment without double tricks
- *    - constexpr (C++11): Compile-time evaluation of simple operations
- *    - auto (C++11): Type deduction would simplify template usage
- *    - Lambda expressions (C++11): Functional-style operations like map/filter
- *    - std::optional (C++17): Standard library implementation
- *    - std::expected (C++23): Standard library Result equivalent
- *
- * 6. **PERFORMANCE IMPROVEMENTS:**
- *    - RVO/NRVO optimizations are guaranteed in modern C++
- *    - Move semantics eliminate many temporary copies
- *    - constexpr enables compile-time computation
- *    - Better compiler optimizations with stronger type information
- *
- * 7. **SAFETY IMPROVEMENTS:**
- *    - Modern C++ would catch alignment and type safety issues at compile time
- *    - RAII is more automatic with smart pointers and modern containers
- *    - Exception safety is easier with RAII and strong exception guarantees
- *
- * Despite these advantages, our C++98 implementation demonstrates that robust,
- * functional programming concepts can be implemented even in older language
- * standards with careful attention to resource management and type safety.
- *
- * The fundamental concepts (type safety, error handling, optional values)
- * remain the same - only the implementation techniques have evolved to be
- * more expressive and less error-prone.
+/**
+ * @brief Demonstrate manual memory management vs RAII
  */
+void DemonstrateMemoryManagement() {
+    std::cout << "\n\n=== Demonstrating Memory Management ===" << std::endl;
+    
+    std::string jsonStr = "{ \"test\": [1, 2, 3] }";
+    JsonParser parser;
+    
+    // Method 1: Manual memory management
+    std::cout << "\nMethod 1: Manual memory management" << std::endl;
+    try {
+        JsonValue* root = parser.Parse(jsonStr);
+        std::cout << "Parsed: " << root->ToString() << std::endl;
+        std::cout << "Manually cleaning up memory..." << std::endl;
+        delete root; // Must remember to delete!
+        std::cout << "Memory cleaned up successfully" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << std::endl;
+    }
+    
+    // Method 2: RAII with JsonValuePtr
+    std::cout << "\nMethod 2: RAII with JsonValuePtr (recommended)" << std::endl;
+    try {
+        JsonValuePtr rootPtr(parser.Parse(jsonStr));
+        std::cout << "Parsed: " << rootPtr.Get()->ToString() << std::endl;
+        std::cout << "Memory will be automatically cleaned up when rootPtr goes out of scope" << std::endl;
+        // No explicit delete needed!
+    } catch (const std::exception& e) {
+        std::cout << "Error: " << e.what() << std::endl;
+    }
+    
+    std::cout << "RAII cleanup completed automatically" << std::endl;
+}
+
+/**
+ * @brief Main function demonstrating the JSON parser
+ */
+int main() {
+    std::cout << "C++98 JSON Parser Demonstration" << std::endl;
+    std::cout << "================================" << std::endl;
+    
+    try {
+        // Demonstrate valid JSON parsing
+        DemonstrateValidJson();
+        
+        // Demonstrate error handling
+        DemonstrateInvalidJson();
+        
+        // Demonstrate memory management approaches
+        DemonstrateMemoryManagement();
+        
+        std::cout << "\n\n=== All demonstrations completed successfully! ===" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cout << "Fatal error: " << e.what() << std::endl;
+        return 1;
+    }
+    
+    return 0;
+}
